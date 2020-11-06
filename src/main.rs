@@ -1,7 +1,4 @@
-use std::collections::HashSet;
-use std::env;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{collections::HashSet, env, sync::Arc, time::Duration};
 
 use serenity::{
     async_trait,
@@ -19,8 +16,7 @@ use serenity::{
     prelude::*,
 };
 
-use tokio::sync::Mutex;
-use tokio::time::delay_for;
+use tokio::{sync::Mutex, time::delay_for};
 
 const LIVING_CHANNEL: ChannelId = ChannelId(774_309_011_083_493_407);
 const DEAD_CHANNEL: ChannelId = ChannelId(774_309_106_995_036_212);
@@ -59,6 +55,14 @@ impl EventHandler for Handler {
                     .await
                     .unwrap();
 
+                for player in living_players
+                    .iter()
+                    .filter(|p| !game.dead.contains(&p.user.id))
+                    .collect::<Vec<_>>()
+                {
+                    player.edit(&ctx, |p| p.mute(false)).await.unwrap();
+                }
+
                 let dead_players = DEAD_CHANNEL
                     .to_channel(&ctx)
                     .await
@@ -68,22 +72,18 @@ impl EventHandler for Handler {
                     .members(&ctx)
                     .await
                     .unwrap();
-                for player in living_players
-                    .iter()
-                    .filter(|p| !game.dead.contains(&p.user.id))
-                    .collect::<Vec<_>>()
-                {
-                    player.edit(&ctx, |p| p.mute(false)).await.unwrap();
-                }
+
                 for player in dead_players {
                     player
                         .edit(&ctx, |p| p.voice_channel(LIVING_CHANNEL).mute(true))
                         .await
                         .unwrap();
                 }
+
                 game.meeting_in_progress = true;
             } else if emoji == DEAD_EMOJI {
                 game.dead.insert(add_reaction.user_id.unwrap());
+
                 if game.meeting_in_progress {
                     add_reaction
                         .guild_id
@@ -119,6 +119,7 @@ impl EventHandler for Handler {
                 && removed_reaction.user_id.unwrap() == game.ctrl_user
             {
                 game.meeting_in_progress = false;
+
                 let all_players = LIVING_CHANNEL
                     .to_channel(&ctx)
                     .await
@@ -199,7 +200,9 @@ async fn new(ctx: &Context, msg: &Message) -> CommandResult {
         .await?;
 
     delay_for(Duration::from_secs(5)).await;
+
     notify.delete(&ctx).await.unwrap();
+
     let members = LIVING_CHANNEL
         .to_channel(&ctx)
         .await?
@@ -207,6 +210,7 @@ async fn new(ctx: &Context, msg: &Message) -> CommandResult {
         .unwrap()
         .members(&ctx)
         .await?;
+
     for member in members.iter().filter(|m| !m.user.bot) {
         member.edit(&ctx, |m| m.mute(true)).await?;
     }
@@ -217,6 +221,7 @@ async fn new(ctx: &Context, msg: &Message) -> CommandResult {
 #[command]
 async fn end(ctx: &Context, msg: &Message) -> CommandResult {
     msg.delete(&ctx).await?;
+
     let game = {
         let data = ctx.data.read().await;
         match data.get::<GameContextContainer>() {
@@ -264,6 +269,7 @@ async fn end(ctx: &Context, msg: &Message) -> CommandResult {
 #[command]
 async fn stop(ctx: &Context, msg: &Message) -> CommandResult {
     msg.delete(&ctx).await?;
+
     msg.channel_id.say(&ctx, "Shutting down bot").await?;
 
     let data = ctx.data.read().await;
