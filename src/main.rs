@@ -129,7 +129,7 @@ impl EventHandler for Handler {
                     .await
                     .unwrap();
 
-                for player in all_players {
+                for player in all_players.iter().filter(|p| !p.user.bot) {
                     if game.dead.contains(&player.user.id) {
                         player
                             .edit(&ctx, |p| p.mute(false).voice_channel(DEAD_CHANNEL))
@@ -207,7 +207,7 @@ async fn new(ctx: &Context, msg: &Message) -> CommandResult {
         .unwrap()
         .members(&ctx)
         .await?;
-    for member in members {
+    for member in members.iter().filter(|m| !m.user.bot) {
         member.edit(&ctx, |m| m.mute(true)).await?;
     }
 
