@@ -7,8 +7,9 @@ use serenity::{
     async_trait,
     client::bridge::gateway::{GatewayIntents, ShardManager},
     framework::standard::{
-        macros::{command, group},
-        CommandResult, StandardFramework,
+        help_commands,
+        macros::{command, group, help},
+        Args, CommandGroup, CommandResult, HelpOptions, StandardFramework,
     },
     http::Http,
     model::{
@@ -57,7 +58,7 @@ impl EventHandler for Handler {
                     .members(&ctx)
                     .await
                     .unwrap();
-                    
+
                 let dead_players = DEAD_CHANNEL
                     .to_channel(&ctx)
                     .await
@@ -67,7 +68,11 @@ impl EventHandler for Handler {
                     .members(&ctx)
                     .await
                     .unwrap();
-                for player in living_players.iter().filter(|p| !game.dead.contains(&p.user.id)).collect::<Vec<_>>() {
+                for player in living_players
+                    .iter()
+                    .filter(|p| !game.dead.contains(&p.user.id))
+                    .collect::<Vec<_>>()
+                {
                     player.edit(&ctx, |p| p.mute(false)).await.unwrap();
                 }
                 for player in dead_players {
@@ -222,16 +227,34 @@ async fn end(ctx: &Context, msg: &Message) -> CommandResult {
 
     let game = game.lock().await;
 
-    msg.channel_id.message(&ctx, game.ctrl_msg).await?.delete(&ctx).await?;
+    msg.channel_id
+        .message(&ctx, game.ctrl_msg)
+        .await?
+        .delete(&ctx)
+        .await?;
 
-    let living_players = LIVING_CHANNEL.to_channel(&ctx).await?.guild().unwrap().members(&ctx).await?;
+    let living_players = LIVING_CHANNEL
+        .to_channel(&ctx)
+        .await?
+        .guild()
+        .unwrap()
+        .members(&ctx)
+        .await?;
     for player in living_players.iter().filter(|p| !p.mute) {
         player.edit(&ctx, |p| p.mute(false)).await?;
     }
 
-    let dead_players = DEAD_CHANNEL.to_channel(&ctx).await?.guild().unwrap().members(&ctx).await?;
+    let dead_players = DEAD_CHANNEL
+        .to_channel(&ctx)
+        .await?
+        .guild()
+        .unwrap()
+        .members(&ctx)
+        .await?;
     for player in dead_players {
-        player.edit(&ctx, |p| p.voice_channel(LIVING_CHANNEL)).await?;
+        player
+            .edit(&ctx, |p| p.voice_channel(LIVING_CHANNEL))
+            .await?;
     }
 
     Ok(())
@@ -251,6 +274,19 @@ async fn stop(ctx: &Context, msg: &Message) -> CommandResult {
         .shutdown_all()
         .await;
 
+    Ok(())
+}
+
+#[help]
+async fn my_help(
+    ctx: &Context,
+    msg: &Message,
+    args: Args,
+    help_options: &'static HelpOptions,
+    groups: &[&'static CommandGroup],
+    owners: HashSet<UserId>,
+) -> CommandResult {
+    let _ = help_commands::with_embeds(ctx, msg, args, help_options, groups, owners).await;
     Ok(())
 }
 
@@ -280,6 +316,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
 
     let framework = StandardFramework::new()
         .configure(|c| c.on_mention(Some(bot_id)).prefix("~").owners(owners))
+        .help(&MY_HELP)
         .group(&CONTROL_GROUP);
 
     let mut client = Client::builder(&token)
