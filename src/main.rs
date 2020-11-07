@@ -50,7 +50,6 @@ impl EventHandler for Handler {
                 for player in living_players
                     .iter()
                     .filter(|p| !game.dead.contains(&p.user.id))
-                    .collect::<Vec<_>>()
                 {
                     player.edit(&ctx, |p| p.mute(false)).await.unwrap();
                 }
@@ -198,13 +197,12 @@ async fn get_connected_members(ctx: &Context, channel: ChannelId) -> Vec<Member>
         .unwrap()
         .guild_id;
     let voice_states = ctx.cache.guild(guild_id).await.unwrap().voice_states;
-    let users = voice_states
+    let mut members = Vec::new();
+    for user in voice_states
         .iter()
         .filter(|vs| vs.1.channel_id == Some(channel))
         .map(|vs| vs.0)
-        .collect::<Vec<_>>();
-    let mut members = Vec::new();
-    for user in users {
+    {
         members.push(guild_id.member(&ctx, user).await.unwrap());
     }
 
@@ -232,7 +230,7 @@ async fn end(ctx: &Context, msg: &Message) -> CommandResult {
         .await?;
 
     let living_players = get_connected_members(&ctx, LIVING_CHANNEL).await;
-    for player in living_players.iter().filter(|p| !p.mute) {
+    for player in living_players {
         player.edit(&ctx, |p| p.mute(false)).await?;
     }
 
