@@ -46,7 +46,7 @@ impl EventHandler for Handler {
 
         if let ReactionType::Unicode(emoji) = add_reaction.emoji {
             if emoji == EMERGENCY_MEETING_EMOJI && add_reaction.user_id.unwrap() == game.ctrl_user {
-                let living_players = get_connected_members(&ctx, LIVING_CHANNEL).await;
+                let living_players = get_connected_members(&ctx, LIVING_CHANNEL).await.unwrap();
                 for player in living_players
                     .iter()
                     .filter(|p| !game.dead.contains(&p.user.id))
@@ -54,7 +54,7 @@ impl EventHandler for Handler {
                     player.edit(&ctx, |p| p.mute(false)).await.unwrap();
                 }
 
-                let dead_players = get_connected_members(&ctx, DEAD_CHANNEL).await;
+                let dead_players = get_connected_members(&ctx, DEAD_CHANNEL).await.unwrap();
 
                 for player in dead_players {
                     player
@@ -103,7 +103,7 @@ impl EventHandler for Handler {
             {
                 game.meeting_in_progress = false;
 
-                let all_players = get_connected_members(&ctx, LIVING_CHANNEL).await;
+                let all_players = get_connected_members(&ctx, LIVING_CHANNEL).await.unwrap();
 
                 for player in all_players.iter().filter(|p| !p.user.bot) {
                     if game.dead.contains(&player.user.id) {
@@ -179,7 +179,7 @@ async fn new(ctx: &Context, msg: &Message) -> CommandResult {
 
     notify.delete(&ctx).await.unwrap();
 
-    let members = get_connected_members(&ctx, LIVING_CHANNEL).await;
+    let members = get_connected_members(&ctx, LIVING_CHANNEL).await?;
 
     for member in members.iter().filter(|m| !m.user.bot) {
         member.edit(&ctx, |m| m.mute(true)).await?;
@@ -188,25 +188,17 @@ async fn new(ctx: &Context, msg: &Message) -> CommandResult {
     Ok(())
 }
 
-async fn get_connected_members(ctx: &Context, channel: ChannelId) -> Vec<Member> {
-    let guild_id = channel
+async fn get_connected_members(
+    ctx: &Context,
+    channel: ChannelId,
+) -> Result<Vec<Member>, serenity::Error> {
+    channel
         .to_channel(&ctx)
-        .await
-        .unwrap()
+        .await?
         .guild()
         .unwrap()
-        .guild_id;
-    let voice_states = ctx.cache.guild(guild_id).await.unwrap().voice_states;
-    let mut members = Vec::new();
-    for user in voice_states
-        .iter()
-        .filter(|vs| vs.1.channel_id == Some(channel))
-        .map(|vs| vs.0)
-    {
-        members.push(guild_id.member(&ctx, user).await.unwrap());
-    }
-
-    members
+        .members(&ctx)
+        .await
 }
 
 #[command]
@@ -229,12 +221,12 @@ async fn end(ctx: &Context, msg: &Message) -> CommandResult {
         .delete(&ctx)
         .await?;
 
-    let living_players = get_connected_members(&ctx, LIVING_CHANNEL).await;
+    let living_players = get_connected_members(&ctx, LIVING_CHANNEL).await?;
     for player in living_players {
         player.edit(&ctx, |p| p.mute(false)).await?;
     }
 
-    let dead_players = get_connected_members(&ctx, DEAD_CHANNEL).await;
+    let dead_players = get_connected_members(&ctx, DEAD_CHANNEL).await?;
     for player in dead_players {
         player
             .edit(&ctx, |p| p.voice_channel(LIVING_CHANNEL))

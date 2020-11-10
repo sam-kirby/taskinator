@@ -11,7 +11,9 @@ tracing = "0.1"
 tracing-subscriber = "0.2"
 
 [dependencies.serenity]
-version = "0.9"
+# version = "0.9"
+git = "https://github.com/sam-kirby/serenity.git"
+branch = "current"
 default-features = false
 features = [
     "client",
