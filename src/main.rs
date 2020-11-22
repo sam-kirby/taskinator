@@ -12,7 +12,7 @@ use serenity::{
     model::{
         channel::{Message, Reaction, ReactionType},
         guild::Member,
-        id::{ChannelId, MessageId, UserId},
+        id::{ChannelId, MessageId, RoleId, UserId},
     },
     prelude::*,
 };
@@ -21,6 +21,7 @@ use tokio::{sync::Mutex, time::delay_for};
 
 const LIVING_CHANNEL: ChannelId = ChannelId(774_309_011_083_493_407);
 const DEAD_CHANNEL: ChannelId = ChannelId(774_309_106_995_036_212);
+const SPECTATOR_ROLE: RoleId = RoleId(780_023_497_661_349_913);
 
 const EMERGENCY_MEETING_EMOJI: &str = "🔴";
 const DEAD_EMOJI: &str = "💀";
@@ -51,7 +52,11 @@ impl EventHandler for Handler {
                 futures::future::join_all(
                     living_players
                         .iter()
-                        .filter(|p| !game.dead.contains(&p.user.id))
+                        .filter(|p| {
+                            !game.dead.contains(&p.user.id)
+                                && !p.roles.contains(&SPECTATOR_ROLE)
+                                && !p.roles.contains(&SPECTATOR_ROLE)
+                        })
                         .map(|p| p.edit(&ctx, |p| p.mute(false))),
                 )
                 .await;
@@ -110,14 +115,22 @@ impl EventHandler for Handler {
                 futures::future::join_all(
                     all_players
                         .iter()
-                        .filter(|p| !p.user.bot && game.dead.contains(&p.user.id))
+                        .filter(|p| {
+                            !p.user.bot
+                                && !p.roles.contains(&SPECTATOR_ROLE)
+                                && game.dead.contains(&p.user.id)
+                        })
                         .map(|p| p.edit(&ctx, |p| p.mute(false).voice_channel(DEAD_CHANNEL))),
                 )
                 .await;
                 futures::future::join_all(
                     all_players
                         .iter()
-                        .filter(|p| !p.user.bot && !game.dead.contains(&p.user.id))
+                        .filter(|p| {
+                            !p.user.bot
+                                && !p.roles.contains(&SPECTATOR_ROLE)
+                                && !game.dead.contains(&p.user.id)
+                        })
                         .map(|p| p.edit(&ctx, |p| p.mute(true))),
                 )
                 .await;
@@ -190,7 +203,7 @@ async fn new(ctx: &Context, msg: &Message) -> CommandResult {
     futures::future::join_all(
         members
             .iter()
-            .filter(|m| !m.user.bot)
+            .filter(|m| !m.user.bot && !m.roles.contains(&SPECTATOR_ROLE))
             .map(|m| m.edit(&ctx, |m| m.mute(true))),
     )
     .await;
@@ -235,6 +248,7 @@ async fn end(ctx: &Context, msg: &Message) -> CommandResult {
     futures::future::join_all(
         living_players
             .iter()
+            .filter(|p| !p.user.bot && !p.roles.contains(&SPECTATOR_ROLE))
             .map(|p| p.edit(&ctx, |p| p.mute(false))),
     )
     .await;
@@ -348,6 +362,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
         .event_handler(Handler)
         .intents(
             GatewayIntents::GUILDS
+                | GatewayIntents::GUILD_MEMBERS
                 | GatewayIntents::GUILD_MESSAGES
                 | GatewayIntents::GUILD_MESSAGE_REACTIONS
                 | GatewayIntents::GUILD_VOICE_STATES,
