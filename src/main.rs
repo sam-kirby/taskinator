@@ -47,21 +47,23 @@ impl EventHandler for Handler {
         if let ReactionType::Unicode(emoji) = add_reaction.emoji {
             if emoji == EMERGENCY_MEETING_EMOJI && add_reaction.user_id.unwrap() == game.ctrl_user {
                 let living_players = get_connected_members(&ctx, LIVING_CHANNEL).await.unwrap();
-                for player in living_players
-                    .iter()
-                    .filter(|p| !game.dead.contains(&p.user.id))
-                {
-                    player.edit(&ctx, |p| p.mute(false)).await.unwrap();
-                }
+
+                futures::future::join_all(
+                    living_players
+                        .iter()
+                        .filter(|p| !game.dead.contains(&p.user.id))
+                        .map(|p| p.edit(&ctx, |p| p.mute(false))),
+                )
+                .await;
 
                 let dead_players = get_connected_members(&ctx, DEAD_CHANNEL).await.unwrap();
 
-                for player in dead_players {
-                    player
-                        .edit(&ctx, |p| p.voice_channel(LIVING_CHANNEL).mute(true))
-                        .await
-                        .unwrap();
-                }
+                futures::future::join_all(
+                    dead_players
+                        .iter()
+                        .map(|p| p.edit(&ctx, |p| p.voice_channel(LIVING_CHANNEL).mute(true))),
+                )
+                .await;
 
                 game.meeting_in_progress = true;
             } else if emoji == DEAD_EMOJI {
@@ -105,16 +107,20 @@ impl EventHandler for Handler {
 
                 let all_players = get_connected_members(&ctx, LIVING_CHANNEL).await.unwrap();
 
-                for player in all_players.iter().filter(|p| !p.user.bot) {
-                    if game.dead.contains(&player.user.id) {
-                        player
-                            .edit(&ctx, |p| p.mute(false).voice_channel(DEAD_CHANNEL))
-                            .await
-                            .unwrap();
-                    } else {
-                        player.edit(&ctx, |p| p.mute(true)).await.unwrap();
-                    }
-                }
+                futures::future::join_all(
+                    all_players
+                        .iter()
+                        .filter(|p| !p.user.bot && game.dead.contains(&p.user.id))
+                        .map(|p| p.edit(&ctx, |p| p.mute(false).voice_channel(DEAD_CHANNEL))),
+                )
+                .await;
+                futures::future::join_all(
+                    all_players
+                        .iter()
+                        .filter(|p| !p.user.bot && !game.dead.contains(&p.user.id))
+                        .map(|p| p.edit(&ctx, |p| p.mute(true))),
+                )
+                .await;
             }
         }
     }
@@ -181,9 +187,13 @@ async fn new(ctx: &Context, msg: &Message) -> CommandResult {
 
     let members = get_connected_members(&ctx, LIVING_CHANNEL).await?;
 
-    for member in members.iter().filter(|m| !m.user.bot) {
-        member.edit(&ctx, |m| m.mute(true)).await?;
-    }
+    futures::future::join_all(
+        members
+            .iter()
+            .filter(|m| !m.user.bot)
+            .map(|m| m.edit(&ctx, |m| m.mute(true))),
+    )
+    .await;
 
     Ok(())
 }
@@ -222,16 +232,20 @@ async fn end(ctx: &Context, msg: &Message) -> CommandResult {
         .await?;
 
     let living_players = get_connected_members(&ctx, LIVING_CHANNEL).await?;
-    for player in living_players {
-        player.edit(&ctx, |p| p.mute(false)).await?;
-    }
+    futures::future::join_all(
+        living_players
+            .iter()
+            .map(|p| p.edit(&ctx, |p| p.mute(false))),
+    )
+    .await;
 
     let dead_players = get_connected_members(&ctx, DEAD_CHANNEL).await?;
-    for player in dead_players {
-        player
-            .edit(&ctx, |p| p.voice_channel(LIVING_CHANNEL))
-            .await?;
-    }
+    futures::future::join_all(
+        dead_players
+            .iter()
+            .map(|p| p.edit(&ctx, |p| p.voice_channel(LIVING_CHANNEL))),
+    )
+    .await;
 
     Ok(())
 }
