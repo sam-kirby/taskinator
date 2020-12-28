@@ -1,381 +1,471 @@
-use std::{collections::HashSet, env, sync::Arc, time::Duration};
+use std::{collections::HashSet, path::Path, str::from_utf8, sync::Arc, time::Duration};
 
-use serenity::{
-    async_trait,
-    client::bridge::gateway::{GatewayIntents, ShardManager},
-    framework::standard::{
-        help_commands,
-        macros::{command, group, help},
-        Args, CommandGroup, CommandResult, HelpOptions, StandardFramework,
-    },
-    http::Http,
-    model::{
-        channel::{Message, Reaction, ReactionType},
-        guild::Member,
-        id::{ChannelId, MessageId, RoleId, UserId},
-    },
-    prelude::*,
+use futures::StreamExt;
+use serde::Deserialize;
+use tokio::{fs::File, io::AsyncReadExt, sync::RwLock, time::delay_for};
+use twilight_cache_inmemory::{model::CachedMember, InMemoryCache as DiscordCache};
+use twilight_command_parser::{Command, CommandParserConfig, Parser};
+use twilight_gateway::{shard::Shard, EventTypeFlags, Intents};
+use twilight_http::{request::channel::reaction::RequestReactionType, Client as DiscordHttp};
+use twilight_mention::{Mention, ParseMention};
+use twilight_model::{
+    channel::GuildChannel,
+    channel::Message,
+    channel::ReactionType,
+    gateway::event::Event,
+    id::{ChannelId, MessageId, RoleId, UserId},
 };
 
-use tokio::{sync::Mutex, time::delay_for};
-
-const LIVING_CHANNEL: ChannelId = ChannelId(774_309_011_083_493_407);
-const DEAD_CHANNEL: ChannelId = ChannelId(774_309_106_995_036_212);
-const SPECTATOR_ROLE: RoleId = RoleId(780_023_497_661_349_913);
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
 const EMERGENCY_MEETING_EMOJI: &str = "🔴";
 const DEAD_EMOJI: &str = "💀";
 
-struct Handler;
+#[derive(Deserialize)]
+struct Config {
+    token: String,
+    living_channel: ChannelId,
+    dead_channel: ChannelId,
+    spectator_role: RoleId,
+    mode: Mode,
+}
 
-#[async_trait]
-impl EventHandler for Handler {
-    async fn reaction_add(&self, ctx: Context, add_reaction: Reaction) {
-        let game = {
-            let data = ctx.data.read().await;
-            match data.get::<GameContextContainer>() {
-                Some(game) => game.clone(),
-                None => return,
-            }
-        };
+impl Config {
+    async fn from_file(path: impl AsRef<Path>) -> Result<Self> {
+        let mut file = File::open(path.as_ref()).await?;
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents).await?;
 
-        let mut game = game.lock().await;
+        let config_str = from_utf8(&contents)?;
 
-        if add_reaction.message_id != game.ctrl_msg {
-            return;
-        }
+        let config: Config = toml::from_str(config_str)?;
 
-        if let ReactionType::Unicode(emoji) = add_reaction.emoji {
-            if emoji == EMERGENCY_MEETING_EMOJI && add_reaction.user_id.unwrap() == game.ctrl_user {
-                let living_players = get_connected_members(&ctx, LIVING_CHANNEL).await.unwrap();
-
-                futures::future::join_all(
-                    living_players
-                        .iter()
-                        .filter(|p| {
-                            !game.dead.contains(&p.user.id)
-                                && !p.roles.contains(&SPECTATOR_ROLE)
-                                && !p.roles.contains(&SPECTATOR_ROLE)
-                        })
-                        .map(|p| p.edit(&ctx, |p| p.mute(false))),
-                )
-                .await;
-
-                let dead_players = get_connected_members(&ctx, DEAD_CHANNEL).await.unwrap();
-
-                futures::future::join_all(
-                    dead_players
-                        .iter()
-                        .map(|p| p.edit(&ctx, |p| p.voice_channel(LIVING_CHANNEL).mute(true))),
-                )
-                .await;
-
-                game.meeting_in_progress = true;
-            } else if emoji == DEAD_EMOJI {
-                game.dead.insert(add_reaction.user_id.unwrap());
-
-                if game.meeting_in_progress {
-                    add_reaction
-                        .guild_id
-                        .unwrap()
-                        .member(&ctx, add_reaction.user_id.unwrap())
-                        .await
-                        .unwrap()
-                        .edit(&ctx, |p| p.mute(true))
-                        .await
-                        .unwrap();
-                }
-            }
-        }
+        Ok(config)
     }
+}
 
-    async fn reaction_remove(&self, ctx: Context, removed_reaction: Reaction) {
-        let game = {
-            let data = ctx.data.read().await;
-            match data.get::<GameContextContainer>() {
-                Some(game) => game.clone(),
-                None => return,
-            }
-        };
+#[derive(Deserialize, PartialEq)]
+enum Mode {
+    Deafen,
+    Mute,
+}
 
-        let mut game = game.lock().await;
-
-        if removed_reaction.message_id != game.ctrl_msg {
-            return;
-        }
-
-        if let ReactionType::Unicode(emoji) = removed_reaction.emoji {
-            if emoji == EMERGENCY_MEETING_EMOJI
-                && removed_reaction.user_id.unwrap() == game.ctrl_user
-            {
-                game.meeting_in_progress = false;
-
-                let all_players = get_connected_members(&ctx, LIVING_CHANNEL).await.unwrap();
-
-                futures::future::join_all(
-                    all_players
-                        .iter()
-                        .filter(|p| {
-                            !p.user.bot
-                                && !p.roles.contains(&SPECTATOR_ROLE)
-                                && game.dead.contains(&p.user.id)
-                        })
-                        .map(|p| p.edit(&ctx, |p| p.mute(false).voice_channel(DEAD_CHANNEL))),
-                )
-                .await;
-                futures::future::join_all(
-                    all_players
-                        .iter()
-                        .filter(|p| {
-                            !p.user.bot
-                                && !p.roles.contains(&SPECTATOR_ROLE)
-                                && !game.dead.contains(&p.user.id)
-                        })
-                        .map(|p| p.edit(&ctx, |p| p.mute(true))),
-                )
-                .await;
-            }
-        }
-    }
+#[derive(Clone)]
+struct Context {
+    config: Arc<Config>,
+    discord_http: DiscordHttp,
+    cache: DiscordCache,
+    owners: Arc<HashSet<UserId>>,
+    game: Arc<RwLock<Option<Game>>>,
 }
 
 struct Game {
     dead: HashSet<UserId>,
+    ctrl_channel: ChannelId,
     ctrl_msg: MessageId,
     ctrl_user: UserId,
     meeting_in_progress: bool,
 }
 
-struct GameContextContainer;
-
-impl TypeMapKey for GameContextContainer {
-    type Value = Arc<Mutex<Game>>;
-}
-
-struct ShardManagerContainer;
-
-impl TypeMapKey for ShardManagerContainer {
-    type Value = Arc<Mutex<ShardManager>>;
-}
-
-#[group]
-#[only_in(guilds)]
-#[owners_only]
-#[commands(new, end, stop, dead)]
-struct Control;
-
-/// Starts a new game
-#[command]
-async fn new(ctx: &Context, msg: &Message) -> CommandResult {
-    msg.delete(&ctx).await?;
-    let ctrl_msg = msg.channel_id.say(&ctx, format!("When a meeting begins, {} should react to this message with :red_circle:.\nWhen it ends, they should unreact\nIf you died during a round, react with :skull: **at the start of the next meeting**!", msg.author.mention())).await?;
-    ctrl_msg
-        .react(
-            &ctx,
-            ReactionType::Unicode(EMERGENCY_MEETING_EMOJI.to_string()),
-        )
-        .await?;
-    ctrl_msg
-        .react(&ctx, ReactionType::Unicode(DEAD_EMOJI.to_string()))
-        .await?;
-
-    {
-        let mut data = ctx.data.write().await;
-        data.insert::<GameContextContainer>(Arc::new(Mutex::new(Game {
+impl Game {
+    fn new(ctrl_msg: Message, ctrl_user: UserId) -> Self {
+        Self {
             dead: HashSet::new(),
+            ctrl_channel: ctrl_msg.channel_id,
             ctrl_msg: ctrl_msg.id,
-            ctrl_user: msg.author.id,
+            ctrl_user,
             meeting_in_progress: false,
-        })));
-    }
-
-    let notify = msg
-        .channel_id
-        .say(&ctx, "All players will be muted in 5 seconds")
-        .await?;
-
-    delay_for(Duration::from_secs(5)).await;
-
-    notify.delete(&ctx).await.unwrap();
-
-    let members = get_connected_members(&ctx, LIVING_CHANNEL).await?;
-
-    futures::future::join_all(
-        members
-            .iter()
-            .filter(|m| !m.user.bot && !m.roles.contains(&SPECTATOR_ROLE))
-            .map(|m| m.edit(&ctx, |m| m.mute(true))),
-    )
-    .await;
-
-    Ok(())
-}
-
-async fn get_connected_members(
-    ctx: &Context,
-    channel: ChannelId,
-) -> Result<Vec<Member>, serenity::Error> {
-    channel
-        .to_channel(&ctx)
-        .await?
-        .guild()
-        .unwrap()
-        .members(&ctx)
-        .await
-}
-
-#[command]
-async fn end(ctx: &Context, msg: &Message) -> CommandResult {
-    msg.delete(&ctx).await?;
-
-    let game = {
-        let data = ctx.data.read().await;
-        match data.get::<GameContextContainer>() {
-            Some(game) => game.clone(),
-            None => return Ok(()),
         }
-    };
-
-    let game = game.lock().await;
-
-    msg.channel_id
-        .message(&ctx, game.ctrl_msg)
-        .await?
-        .delete(&ctx)
-        .await?;
-
-    let living_players = get_connected_members(&ctx, LIVING_CHANNEL).await?;
-    futures::future::join_all(
-        living_players
-            .iter()
-            .filter(|p| !p.user.bot && !p.roles.contains(&SPECTATOR_ROLE))
-            .map(|p| p.edit(&ctx, |p| p.mute(false))),
-    )
-    .await;
-
-    let dead_players = get_connected_members(&ctx, DEAD_CHANNEL).await?;
-    futures::future::join_all(
-        dead_players
-            .iter()
-            .map(|p| p.edit(&ctx, |p| p.voice_channel(LIVING_CHANNEL))),
-    )
-    .await;
-
-    Ok(())
-}
-
-/// Shuts the bot down
-#[command]
-async fn stop(ctx: &Context, msg: &Message) -> CommandResult {
-    msg.delete(&ctx).await?;
-
-    msg.channel_id.say(&ctx, "Shutting down bot").await?;
-
-    let data = ctx.data.read().await;
-    data.get::<ShardManagerContainer>()
-        .expect("Failed to retrieve ShardManager from data")
-        .lock()
-        .await
-        .shutdown_all()
-        .await;
-
-    Ok(())
-}
-
-/// Make someone dead
-#[command]
-async fn dead(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
-    msg.delete(&ctx).await?;
-
-    let newly_dead = args.parse::<UserId>()?;
-    let newly_dead = msg.guild_id.unwrap().member(&ctx, newly_dead).await?;
-
-    let reply = msg
-        .channel_id
-        .say(&ctx, format!("Deadifying {}", newly_dead.display_name()))
-        .await?;
-
-    let game = {
-        let data = ctx.data.read().await;
-        data.get::<GameContextContainer>()
-            .expect("Failed to get game data, make sure a game has started")
-            .clone()
-    };
-
-    let mut game = game.lock().await;
-
-    game.dead.insert(newly_dead.user.id);
-
-    if game.meeting_in_progress {
-        newly_dead.edit(&ctx, |nd| nd.mute(true)).await?;
     }
-
-    delay_for(Duration::from_secs(5)).await;
-    reply.delete(&ctx).await?;
-
-    Ok(())
-}
-
-#[help]
-async fn my_help(
-    ctx: &Context,
-    msg: &Message,
-    args: Args,
-    help_options: &'static HelpOptions,
-    groups: &[&'static CommandGroup],
-    owners: HashSet<UserId>,
-) -> CommandResult {
-    let _ = help_commands::with_embeds(ctx, msg, args, help_options, groups, owners).await;
-    Ok(())
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
-    let token = env::var("DISCORD_TOKEN")?;
+    let config = Config::from_file("./config.toml").await?;
 
-    let (owners, bot_id) = {
-        let http = Http::new_with_token(&token);
+    let cache = DiscordCache::builder().message_cache_size(5).build();
 
-        // Determine owner of bot
-        let info = http.get_current_application_info().await?;
+    let discord_http = DiscordHttp::new(&config.token);
+
+    let owners = {
         let mut owners = HashSet::new();
 
-        if let Some(team) = info.team {
-            owners.extend(team.members.iter().map(|team_member| team_member.user.id));
+        let app_info = discord_http.current_user_application().await?;
+        if let Some(team) = app_info.team {
+            owners.extend(team.members.iter().map(|tm| tm.user.id));
         } else {
-            owners.insert(info.owner.id);
+            owners.insert(app_info.owner.id);
         }
-
-        let bot_user = http.get_current_user().await?;
-
-        (owners, bot_user.id)
+        Arc::new(owners)
     };
 
-    let framework = StandardFramework::new()
-        .configure(|c| c.on_mention(Some(bot_id)).prefix("~").owners(owners))
-        .help(&MY_HELP)
-        .group(&CONTROL_GROUP);
+    let mut shard = Shard::new(
+        &config.token,
+        Intents::GUILDS
+            | Intents::GUILD_MESSAGES
+            | Intents::GUILD_MESSAGE_REACTIONS
+            | Intents::GUILD_VOICE_STATES,
+    );
 
-    let mut client = Client::builder(&token)
-        .event_handler(Handler)
-        .intents(
-            GatewayIntents::GUILDS
-                | GatewayIntents::GUILD_MEMBERS
-                | GatewayIntents::GUILD_MESSAGES
-                | GatewayIntents::GUILD_MESSAGE_REACTIONS
-                | GatewayIntents::GUILD_VOICE_STATES,
-        )
-        .framework(framework)
-        .await?;
+    shard.start().await?;
 
-    {
-        let mut data = client.data.write().await;
-        data.insert::<ShardManagerContainer>(client.shard_manager.clone());
+    let event_flags: EventTypeFlags = EventTypeFlags::GUILD_CREATE
+        | EventTypeFlags::MESSAGE_CREATE
+        | EventTypeFlags::MESSAGE_DELETE
+        | EventTypeFlags::REACTION_ADD
+        | EventTypeFlags::REACTION_REMOVE
+        | EventTypeFlags::VOICE_STATE_UPDATE;
+
+    let mut events = shard.some_events(event_flags);
+
+    let context = Context {
+        config: Arc::new(config),
+        discord_http,
+        cache,
+        owners,
+        game: Arc::new(RwLock::new(None)),
+    };
+
+    let parser = {
+        let mut parser_config = CommandParserConfig::new();
+        parser_config.add_prefix("~");
+        parser_config.add_command("new", false);
+        parser_config.add_command("end", false);
+        parser_config.add_command("dead", false);
+
+        Parser::new(parser_config)
+    };
+
+    while let Some(event) = events.next().await {
+        context.cache.update(&event);
+
+        match event {
+            Event::MessageCreate(event) => {
+                let context_clone = context.clone();
+                let parser_clone = parser.clone();
+                tokio::spawn(async move {
+                    process_command(context_clone, parser_clone, (*event).0).await
+                });
+            }
+            Event::ReactionAdd(event) => {
+                let reaction = (*event).0;
+                if let ReactionType::Unicode { ref name } = reaction.emoji {
+                    if name == EMERGENCY_MEETING_EMOJI {
+                        let auth = {
+                            let game = context.game.read().await;
+                            game.is_some()
+                                && game
+                                    .as_ref()
+                                    .map(|g| {
+                                        g.ctrl_user == reaction.user_id
+                                            && g.ctrl_msg == reaction.message_id
+                                    })
+                                    .unwrap()
+                        };
+                        if auth {
+                            emergency_meeting(context.clone()).await?;
+                        }
+                    } else if name == DEAD_EMOJI {
+                        let auth = {
+                            let game = context.game.read().await;
+                            game.is_some()
+                                && game
+                                    .as_ref()
+                                    .map(|g| g.ctrl_msg == reaction.message_id)
+                                    .unwrap()
+                        };
+                        if auth {
+                            if let Some(g) = context
+                                .game
+                                .write()
+                                .await
+                                .as_mut() {
+                                    g.dead.insert(reaction.user_id);
+                                }
+                            if context
+                                .game
+                                .read()
+                                .await
+                                .as_ref()
+                                .map(|g| g.meeting_in_progress)
+                                .unwrap()
+                            {
+                                context
+                                    .discord_http
+                                    .update_guild_member(
+                                        reaction.guild_id.unwrap(),
+                                        reaction.user_id,
+                                    )
+                                    .mute(true)
+                                    .await?;
+                            }
+                        }
+                    }
+                }
+            }
+            Event::ReactionRemove(event) => {
+                let reaction = (*event).0;
+                if let ReactionType::Unicode { ref name } = reaction.emoji {
+                    if name == EMERGENCY_MEETING_EMOJI {
+                        let auth = {
+                            let game = context.game.read().await;
+                            game.is_some()
+                                && game
+                                    .as_ref()
+                                    .map(|g| {
+                                        g.ctrl_user == reaction.user_id
+                                            && g.ctrl_msg == reaction.message_id
+                                    })
+                                    .unwrap()
+                        };
+                        if auth {
+                            mute_players(context.clone()).await?;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
-    client.start().await?;
+    Ok(())
+}
+
+async fn process_command(ctx: Context, parser: Parser<'_>, msg: Message) -> Result<()> {
+    match parser.parse(&msg.content) {
+        Some(Command { name: "new", .. }) => {
+            ctx.discord_http
+                .delete_message(msg.channel_id, msg.id)
+                .await?;
+
+            let ctrl_msg = ctx.discord_http
+            .create_message(msg.channel_id)
+            .content(format!(
+                r#"A game is in progress, {} can react to this message with {} to call a meeting.
+Anyone can react to this message with {} to access dead chat after the next meeting"#,
+                msg.author.mention(),
+                EMERGENCY_MEETING_EMOJI,
+                DEAD_EMOJI
+            ))?
+            .await?;
+
+            let emer_emoji = RequestReactionType::Unicode {
+                name: EMERGENCY_MEETING_EMOJI.into(),
+            };
+            ctx.discord_http
+                .create_reaction(ctrl_msg.channel_id, ctrl_msg.id, emer_emoji)
+                .await?;
+
+            let dead_emoji = RequestReactionType::Unicode {
+                name: DEAD_EMOJI.into(),
+            };
+            ctx.discord_http
+                .create_reaction(ctrl_msg.channel_id, ctrl_msg.id, dead_emoji)
+                .await?;
+
+            let game = Game::new(ctrl_msg, msg.author.id);
+
+            ctx.game.write().await.replace(game);
+
+            delay_for(Duration::from_secs(5)).await;
+
+            if ctx.config.mode == Mode::Mute {
+                mute_players(ctx).await?;
+            } else {
+                unimplemented!()
+            }
+        }
+        Some(Command { name: "end", .. }) => {
+            ctx.discord_http
+                .delete_message(msg.channel_id, msg.id)
+                .await?;
+
+            let auth = {
+                let game = ctx.game.read().await;
+                game.is_some() && game.as_ref().map(|g| g.ctrl_user == msg.author.id).unwrap()
+            };
+            if auth {
+                let game = ctx.game.write().await.take();
+                if let Some(game) = game {
+                    ctx.discord_http
+                        .delete_message(game.ctrl_channel, game.ctrl_msg)
+                        .await?;
+                    end_game(ctx).await?;
+                }
+            }
+        }
+        Some(Command {
+            name: "dead",
+            mut arguments,
+            ..
+        }) => {
+            ctx.discord_http
+                .delete_message(msg.channel_id, msg.id)
+                .await?;
+
+            let auth = {
+                let game = ctx.game.read().await;
+                game.is_some() && game.as_ref().map(|g| g.ctrl_user == msg.author.id).unwrap()
+            };
+            if auth {
+                if let Some(target) = arguments.next().and_then(|t| UserId::parse(t).ok()) {
+                    let success = {
+                        let mut game = ctx.game.write().await;
+                        if game.is_some() {
+                            if let Some(g) = game.as_mut() {
+                                g.dead.insert(target);
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    };
+
+                    if success {
+                        let notify = ctx
+                            .discord_http
+                            .create_message(msg.channel_id)
+                            .content(format!("deadifying {}", target.mention()))?
+                            .await?;
+                        delay_for(Duration::from_secs(5)).await;
+                        ctx.discord_http
+                            .delete_message(notify.channel_id, notify.id)
+                            .await?;
+                    } else {
+                        ctx.discord_http
+                            .create_message(msg.channel_id)
+                            .content("No game is in progress")?
+                            .await?;
+                    }
+                } else {
+                    ctx.discord_http
+                        .create_message(msg.channel_id)
+                        .content("Must specify target")?
+                        .await?;
+                }
+            } else {
+                ctx.discord_http
+                    .create_message(msg.channel_id)
+                    .content("You do not have permission to make people dead")?
+                    .await?;
+            }
+        }
+        Some(_) => {}
+        None => {}
+    }
+
+    Ok(())
+}
+
+async fn get_members_in_channel(
+    ctx: &Context,
+    voice_channel: Arc<GuildChannel>,
+) -> Vec<Arc<CachedMember>> {
+    match ctx.cache.voice_channel_states(voice_channel.id()) {
+        Some(vs) => vs
+            .iter()
+            .map(|vs| ctx.cache.member(vs.guild_id.unwrap(), vs.user_id).unwrap())
+            .filter(|m| !m.user.bot && !m.roles.contains(&ctx.config.spectator_role))
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+async fn mute_players(ctx: Context) -> Result<()> {
+    let living_channel = ctx.cache.guild_channel(ctx.config.living_channel).unwrap();
+    for member in get_members_in_channel(&ctx, living_channel).await {
+        let mut futures = Vec::new();
+
+        if ctx
+            .game
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .dead
+            .contains(&member.user.id)
+        {
+            futures.push(
+                ctx.discord_http
+                    .update_guild_member(member.guild_id, member.user.id)
+                    .channel_id(ctx.config.dead_channel)
+                    .mute(false),
+            );
+        } else {
+            futures.push(
+                ctx.discord_http
+                    .update_guild_member(member.guild_id, member.user.id)
+                    .mute(true),
+            )
+        }
+
+        futures::future::join_all(futures).await; // TODO: handle errors, particularly 429 ratelimits
+
+        if let Some(g) = ctx.game.write().await.as_mut() {
+            g.meeting_in_progress = false
+        }
+    }
+
+    Ok(())
+}
+
+async fn emergency_meeting(ctx: Context) -> Result<()> {
+    let living_channel = ctx.cache.guild_channel(ctx.config.living_channel).unwrap();
+    let dead_channel = ctx.cache.guild_channel(ctx.config.dead_channel).unwrap();
+
+    let mut futures = Vec::new();
+
+    for member in get_members_in_channel(&ctx, living_channel).await {
+        futures.push(
+            ctx.discord_http
+                .update_guild_member(member.guild_id, member.user.id)
+                .mute(false),
+        );
+    }
+
+    for member in get_members_in_channel(&ctx, dead_channel).await {
+        futures.push(
+            ctx.discord_http
+                .update_guild_member(member.guild_id, member.user.id)
+                .channel_id(ctx.config.living_channel)
+                .mute(true),
+        )
+    }
+
+    futures::future::join_all(futures).await; // TODO: handle errors, particularly 429 ratelimits
+
+    if let Some(g) = ctx.game.write().await.as_mut() {
+        g.meeting_in_progress = true
+    }
+
+    Ok(())
+}
+
+async fn end_game(ctx: Context) -> Result<()> {
+    let living_channel = ctx.cache.guild_channel(ctx.config.living_channel).unwrap();
+    let dead_channel = ctx.cache.guild_channel(ctx.config.dead_channel).unwrap();
+
+    let mut futures = Vec::new();
+
+    for member in get_members_in_channel(&ctx, living_channel).await {
+        futures.push(
+            ctx.discord_http
+                .update_guild_member(member.guild_id, member.user.id)
+                .mute(false),
+        );
+    }
+
+    for member in get_members_in_channel(&ctx, dead_channel).await {
+        futures.push(
+            ctx.discord_http
+                .update_guild_member(member.guild_id, member.user.id)
+                .channel_id(ctx.config.living_channel),
+        );
+    }
+
+    futures::future::join_all(futures).await; // TODO: handle errors, particularly 429 ratelimits
 
     Ok(())
 }
