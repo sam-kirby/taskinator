@@ -28,7 +28,6 @@ struct Config {
     living_channel: ChannelId,
     dead_channel: ChannelId,
     spectator_role: RoleId,
-    mode: Mode,
 }
 
 impl Config {
@@ -43,12 +42,6 @@ impl Config {
 
         Ok(config)
     }
-}
-
-#[derive(Deserialize, PartialEq)]
-enum Mode {
-    Deafen,
-    Mute,
 }
 
 #[derive(Clone)]
@@ -268,11 +261,7 @@ Anyone can react to this message with {} to access dead chat after the next meet
 
             delay_for(Duration::from_secs(5)).await;
 
-            if ctx.config.mode == Mode::Mute {
-                mute_players(ctx).await?;
-            } else {
-                unimplemented!()
-            }
+            mute_players(ctx).await?;
         }
         Some(Command { name: "end", .. }) => {
             ctx.discord_http
