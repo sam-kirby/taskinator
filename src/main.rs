@@ -333,7 +333,7 @@ Anyone can react to this message with {} to access dead chat after the next meet
                                     .mute(true)
                                     .await?;
                             }
-                            Some(member) => {}
+                            Some(_member) => {}
                             None => warn!("cache miss: member will not be muted"),
                         }
                         delay_for(Duration::from_secs(5)).await;
