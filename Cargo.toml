@@ -30,18 +30,7 @@ features = ["full"]
 [dependencies.twilight-gateway]
 git = "https://github.com/sam-kirby/twilight.git"
 branch = "trunk"
-default-features = false
-features = [
-    "simd-json",
-    "simd-zlib",
-    "rustls",
-]
 
 [dependencies.twilight-http]
 git = "https://github.com/sam-kirby/twilight.git"
 branch = "trunk"
-default-features = false
-features = [
-    "simd-json",
-    "rustls",
-]

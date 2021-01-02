@@ -3,6 +3,7 @@ use std::{collections::HashSet, path::Path, str::from_utf8, sync::Arc, time::Dur
 use futures::StreamExt;
 use serde::Deserialize;
 use tokio::{fs::File, io::AsyncReadExt, sync::RwLock, time::delay_for};
+use tracing::warn;
 use twilight_cache_inmemory::{model::CachedMember, InMemoryCache as DiscordCache};
 use twilight_command_parser::{Command, CommandParserConfig, Parser};
 use twilight_gateway::{shard::Shard, EventTypeFlags, Intents};
@@ -177,13 +178,9 @@ async fn main() -> Result<()> {
                                     .unwrap()
                         };
                         if auth {
-                            if let Some(g) = context
-                                .game
-                                .write()
-                                .await
-                                .as_mut() {
-                                    g.dead.insert(reaction.user_id);
-                                }
+                            if let Some(g) = context.game.write().await.as_mut() {
+                                g.dead.insert(reaction.user_id);
+                            }
                             if context
                                 .game
                                 .read()
@@ -329,6 +326,16 @@ Anyone can react to this message with {} to access dead chat after the next meet
                             .create_message(msg.channel_id)
                             .content(format!("deadifying {}", target.mention()))?
                             .await?;
+                        match ctx.cache.member(msg.guild_id.unwrap(), target) {
+                            Some(member) if !member.mute => {
+                                ctx.discord_http
+                                    .update_guild_member(member.guild_id, member.user.id)
+                                    .mute(true)
+                                    .await?;
+                            }
+                            Some(member) => {}
+                            None => warn!("cache miss: member will not be muted"),
+                        }
                         delay_for(Duration::from_secs(5)).await;
                         ctx.discord_http
                             .delete_message(notify.channel_id, notify.id)
