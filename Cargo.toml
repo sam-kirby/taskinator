@@ -11,26 +11,20 @@ futures = "0.3"
 toml = "0.5"
 tracing = "0.1"
 tracing-subscriber = "0.2"
-twilight-cache-inmemory = { git = "https://github.com/sam-kirby/twilight.git", branch = "trunk" }
-twilight-command-parser = { git = "https://github.com/sam-kirby/twilight.git", branch = "trunk" }
-twilight-embed-builder = { git = "https://github.com/sam-kirby/twilight.git", branch = "trunk" }
-twilight-mention = { git = "https://github.com/sam-kirby/twilight.git", branch = "trunk" }
-twilight-model = { git = "https://github.com/sam-kirby/twilight.git", branch = "trunk" }
-twilight-standby = { git = "https://github.com/sam-kirby/twilight.git", branch = "trunk" }
-twilight-util = { git = "https://github.com/sam-kirby/twilight.git", branch = "trunk" }
+twilight-cache-inmemory = { git = "https://github.com/sam-kirby/twilight.git", branch = "fix-emoji-encoding" }
+twilight-command-parser = { git = "https://github.com/sam-kirby/twilight.git", branch = "fix-emoji-encoding" }
+twilight-embed-builder = { git = "https://github.com/sam-kirby/twilight.git", branch = "fix-emoji-encoding" }
+twilight-gateway = { git = "https://github.com/sam-kirby/twilight.git", branch = "fix-emoji-encoding" }
+twilight-http = { git = "https://github.com/sam-kirby/twilight.git", branch = "fix-emoji-encoding" }
+twilight-mention = { git = "https://github.com/sam-kirby/twilight.git", branch = "fix-emoji-encoding" }
+twilight-model = { git = "https://github.com/sam-kirby/twilight.git", branch = "fix-emoji-encoding" }
+twilight-standby = { git = "https://github.com/sam-kirby/twilight.git", branch = "fix-emoji-encoding" }
+twilight-util = { git = "https://github.com/sam-kirby/twilight.git", branch = "fix-emoji-encoding" }
 
 [dependencies.serde]
 version = "1"
 features = ["derive"]
 
 [dependencies.tokio]
-version = "0.2"
+version = "1"
 features = ["full"]
-
-[dependencies.twilight-gateway]
-git = "https://github.com/sam-kirby/twilight.git"
-branch = "trunk"
-
-[dependencies.twilight-http]
-git = "https://github.com/sam-kirby/twilight.git"
-branch = "trunk"

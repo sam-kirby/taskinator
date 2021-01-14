@@ -1,80 +1,29 @@
-use std::{collections::HashSet, path::Path, str::from_utf8, sync::Arc, time::Duration};
+use std::{collections::HashSet, time::Duration};
+
+mod config;
+mod context;
+
+use config::Config;
+use context::Context;
 
 use futures::StreamExt;
-use serde::Deserialize;
-use tokio::{fs::File, io::AsyncReadExt, sync::RwLock, time::delay_for};
-use tracing::warn;
-use twilight_cache_inmemory::{model::CachedMember, InMemoryCache as DiscordCache};
+use tokio::time::sleep;
+use tracing::error;
+use twilight_cache_inmemory::InMemoryCache as DiscordCache;
 use twilight_command_parser::{Command, CommandParserConfig, Parser};
 use twilight_gateway::{shard::Shard, EventTypeFlags, Intents};
 use twilight_http::{request::channel::reaction::RequestReactionType, Client as DiscordHttp};
 use twilight_mention::{Mention, ParseMention};
-use twilight_model::{
-    channel::GuildChannel,
-    channel::Message,
-    channel::ReactionType,
-    gateway::event::Event,
-    id::{ChannelId, MessageId, RoleId, UserId},
-};
+use twilight_model::{channel::Message, channel::ReactionType, gateway::event::Event, id::UserId};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
 const EMERGENCY_MEETING_EMOJI: &str = "🔴";
 const DEAD_EMOJI: &str = "💀";
 
-#[derive(Deserialize)]
-struct Config {
-    token: String,
-    living_channel: ChannelId,
-    dead_channel: ChannelId,
-    spectator_role: RoleId,
-}
-
-impl Config {
-    async fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        let mut file = File::open(path.as_ref()).await?;
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents).await?;
-
-        let config_str = from_utf8(&contents)?;
-
-        let config: Config = toml::from_str(config_str)?;
-
-        Ok(config)
-    }
-}
-
-#[derive(Clone)]
-struct Context {
-    config: Arc<Config>,
-    discord_http: DiscordHttp,
-    cache: DiscordCache,
-    owners: Arc<HashSet<UserId>>,
-    game: Arc<RwLock<Option<Game>>>,
-}
-
-struct Game {
-    dead: HashSet<UserId>,
-    ctrl_channel: ChannelId,
-    ctrl_msg: MessageId,
-    ctrl_user: UserId,
-    meeting_in_progress: bool,
-}
-
-impl Game {
-    fn new(ctrl_msg: Message, ctrl_user: UserId) -> Self {
-        Self {
-            dead: HashSet::new(),
-            ctrl_channel: ctrl_msg.channel_id,
-            ctrl_msg: ctrl_msg.id,
-            ctrl_user,
-            meeting_in_progress: false,
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Setup
     tracing_subscriber::fmt::init();
 
     let config = Config::from_file("./config.toml").await?;
@@ -92,7 +41,7 @@ async fn main() -> Result<()> {
         } else {
             owners.insert(app_info.owner.id);
         }
-        Arc::new(owners)
+        owners
     };
 
     let mut shard = Shard::new(
@@ -102,7 +51,9 @@ async fn main() -> Result<()> {
             | Intents::GUILD_MESSAGE_REACTIONS
             | Intents::GUILD_VOICE_STATES,
     );
+    let shutdown_handle = shard.clone();
 
+    // Start gateway
     shard.start().await?;
 
     let event_flags: EventTypeFlags = EventTypeFlags::GUILD_CREATE
@@ -114,13 +65,7 @@ async fn main() -> Result<()> {
 
     let mut events = shard.some_events(event_flags);
 
-    let context = Context {
-        config: Arc::new(config),
-        discord_http,
-        cache,
-        owners,
-        game: Arc::new(RwLock::new(None)),
-    };
+    let mut context = Context::new(config, discord_http, cache, shutdown_handle, owners);
 
     let parser = {
         let mut parser_config = CommandParserConfig::new();
@@ -128,10 +73,12 @@ async fn main() -> Result<()> {
         parser_config.add_command("new", false);
         parser_config.add_command("end", false);
         parser_config.add_command("dead", false);
+        parser_config.add_command("stop", false);
 
         Parser::new(parser_config)
     };
 
+    // Gateway event loop
     while let Some(event) = events.next().await {
         context.cache.update(&event);
 
@@ -140,80 +87,36 @@ async fn main() -> Result<()> {
                 let context_clone = context.clone();
                 let parser_clone = parser.clone();
                 tokio::spawn(async move {
-                    process_command(context_clone, parser_clone, (*event).0).await
+                    if let Err(e) = process_command(context_clone, parser_clone, (*event).0).await {
+                        error!("{}", e);
+                    }
                 });
             }
             Event::ReactionAdd(event) => {
                 let reaction = (*event).0;
-                if let ReactionType::Unicode { ref name } = reaction.emoji {
-                    if name == EMERGENCY_MEETING_EMOJI {
-                        let auth = {
-                            let game = context.game.read().await;
-                            game.is_some()
-                                && game
-                                    .as_ref()
-                                    .map(|g| {
-                                        g.ctrl_user == reaction.user_id
-                                            && g.ctrl_msg == reaction.message_id
-                                    })
-                                    .unwrap()
-                        };
-                        if auth {
-                            emergency_meeting(context.clone()).await?;
-                        }
-                    } else if name == DEAD_EMOJI {
-                        let auth = {
-                            let game = context.game.read().await;
-                            game.is_some()
-                                && game
-                                    .as_ref()
-                                    .map(|g| g.ctrl_msg == reaction.message_id)
-                                    .unwrap()
-                        };
-                        if auth {
-                            if let Some(g) = context.game.write().await.as_mut() {
-                                g.dead.insert(reaction.user_id);
-                            }
-                            if context
-                                .game
-                                .read()
-                                .await
-                                .as_ref()
-                                .map(|g| g.meeting_in_progress)
-                                .unwrap()
-                            {
-                                context
-                                    .discord_http
-                                    .update_guild_member(
-                                        reaction.guild_id.unwrap(),
-                                        reaction.user_id,
-                                    )
-                                    .mute(true)
-                                    .await?;
-                            }
+
+                match reaction.emoji {
+                    ReactionType::Unicode { ref name } if name == EMERGENCY_MEETING_EMOJI => {
+                        if context.is_reacting_to_control(&reaction).await
+                            && context.is_in_control(&reaction.user_id).await
+                        {
+                            context.emergency_meeting().await?;
                         }
                     }
+                    ReactionType::Unicode { ref name } if name == DEAD_EMOJI => {
+                        if context.is_reacting_to_control(&reaction).await {
+                            context.make_dead(&reaction.user_id).await;
+                        }
+                    }
+                    _ => {}
                 }
             }
             Event::ReactionRemove(event) => {
                 let reaction = (*event).0;
-                if let ReactionType::Unicode { ref name } = reaction.emoji {
-                    if name == EMERGENCY_MEETING_EMOJI {
-                        let auth = {
-                            let game = context.game.read().await;
-                            game.is_some()
-                                && game
-                                    .as_ref()
-                                    .map(|g| {
-                                        g.ctrl_user == reaction.user_id
-                                            && g.ctrl_msg == reaction.message_id
-                                    })
-                                    .unwrap()
-                        };
-                        if auth {
-                            mute_players(context.clone()).await?;
-                        }
-                    }
+                if matches!(reaction.emoji, ReactionType::Unicode { ref name } if name == EMERGENCY_MEETING_EMOJI)
+                    && context.is_in_control(&reaction.user_id).await
+                {
+                    context.mute_players().await?;
                 }
             }
             _ => {}
@@ -223,7 +126,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn process_command(ctx: Context, parser: Parser<'_>, msg: Message) -> Result<()> {
+async fn process_command(mut ctx: Context, parser: Parser<'_>, msg: Message) -> Result<()> {
     match parser.parse(&msg.content) {
         Some(Command { name: "new", .. }) => {
             ctx.discord_http
@@ -255,31 +158,20 @@ Anyone can react to this message with {} to access dead chat after the next meet
                 .create_reaction(ctrl_msg.channel_id, ctrl_msg.id, dead_emoji)
                 .await?;
 
-            let game = Game::new(ctrl_msg, msg.author.id);
+            ctx.start_game(&ctrl_msg, msg.guild_id.unwrap()).await;
 
-            ctx.game.write().await.replace(game);
+            sleep(Duration::from_secs(5)).await;
 
-            delay_for(Duration::from_secs(5)).await;
-
-            mute_players(ctx).await?;
+            ctx.mute_players().await?;
         }
         Some(Command { name: "end", .. }) => {
             ctx.discord_http
                 .delete_message(msg.channel_id, msg.id)
                 .await?;
 
-            let auth = {
-                let game = ctx.game.read().await;
-                game.is_some() && game.as_ref().map(|g| g.ctrl_user == msg.author.id).unwrap()
-            };
+            let auth = ctx.is_in_control(&msg.author.id).await;
             if auth {
-                let game = ctx.game.write().await.take();
-                if let Some(game) = game {
-                    ctx.discord_http
-                        .delete_message(game.ctrl_channel, game.ctrl_msg)
-                        .await?;
-                    end_game(ctx).await?;
-                }
+                ctx.end_game().await?;
             }
         }
         Some(Command {
@@ -291,177 +183,49 @@ Anyone can react to this message with {} to access dead chat after the next meet
                 .delete_message(msg.channel_id, msg.id)
                 .await?;
 
-            let auth = {
-                let game = ctx.game.read().await;
-                game.is_some() && game.as_ref().map(|g| g.ctrl_user == msg.author.id).unwrap()
-            };
+            let auth = ctx.is_in_control(&msg.author.id).await;
             if auth {
-                if let Some(target) = arguments.next().and_then(|t| UserId::parse(t).ok()) {
-                    let success = {
-                        let mut game = ctx.game.write().await;
-                        if game.is_some() {
-                            if let Some(g) = game.as_mut() {
-                                g.dead.insert(target);
-                            }
-                            true
-                        } else {
-                            false
-                        }
-                    };
-
-                    if success {
-                        let notify = ctx
-                            .discord_http
-                            .create_message(msg.channel_id)
+                match arguments.next().map(UserId::parse) {
+                    Some(Ok(target)) => {
+                        let reply = ctx
+                            .broadcast()
+                            .await
+                            .unwrap()
                             .content(format!("deadifying {}", target.mention()))?
                             .await?;
-                        match ctx.cache.member(msg.guild_id.unwrap(), target) {
-                            Some(member) if !member.mute => {
-                                ctx.discord_http
-                                    .update_guild_member(member.guild_id, member.user.id)
-                                    .mute(true)
-                                    .await?;
-                            }
-                            Some(_member) => {}
-                            None => warn!("cache miss: member will not be muted"),
-                        }
-                        delay_for(Duration::from_secs(5)).await;
+                        ctx.make_dead(&target).await;
+                        sleep(Duration::from_secs(5)).await;
                         ctx.discord_http
-                            .delete_message(notify.channel_id, notify.id)
-                            .await?;
-                    } else {
-                        ctx.discord_http
-                            .create_message(msg.channel_id)
-                            .content("No game is in progress")?
+                            .delete_message(reply.channel_id, reply.id)
                             .await?;
                     }
-                } else {
-                    ctx.discord_http
-                        .create_message(msg.channel_id)
-                        .content("Must specify target")?
-                        .await?;
+                    _ => {
+                        ctx.broadcast()
+                            .await
+                            .unwrap()
+                            .content("You must mention the user you wish to die")?
+                            .await?;
+                    }
                 }
+            } else if let Some(broadcast) = ctx.broadcast().await {
+                broadcast.content("You must have started the game or be an owner of the bot to make others dead\nTo make yourself dead, please use the reactions")?.await?;
             } else {
                 ctx.discord_http
                     .create_message(msg.channel_id)
-                    .content("You do not have permission to make people dead")?
+                    .content("There is no game running")?
                     .await?;
             }
+        }
+        Some(Command { name: "stop", .. }) => {
+            ctx.discord_http
+                .delete_message(msg.channel_id, msg.id)
+                .await?;
+
+            ctx.shard.shutdown();
         }
         Some(_) => {}
         None => {}
     }
-
-    Ok(())
-}
-
-async fn get_members_in_channel(
-    ctx: &Context,
-    voice_channel: Arc<GuildChannel>,
-) -> Vec<Arc<CachedMember>> {
-    match ctx.cache.voice_channel_states(voice_channel.id()) {
-        Some(vs) => vs
-            .iter()
-            .map(|vs| ctx.cache.member(vs.guild_id.unwrap(), vs.user_id).unwrap())
-            .filter(|m| !m.user.bot && !m.roles.contains(&ctx.config.spectator_role))
-            .collect(),
-        None => Vec::new(),
-    }
-}
-
-async fn mute_players(ctx: Context) -> Result<()> {
-    let living_channel = ctx.cache.guild_channel(ctx.config.living_channel).unwrap();
-    for member in get_members_in_channel(&ctx, living_channel).await {
-        let mut futures = Vec::new();
-
-        if ctx
-            .game
-            .read()
-            .await
-            .as_ref()
-            .unwrap()
-            .dead
-            .contains(&member.user.id)
-        {
-            futures.push(
-                ctx.discord_http
-                    .update_guild_member(member.guild_id, member.user.id)
-                    .channel_id(ctx.config.dead_channel)
-                    .mute(false),
-            );
-        } else {
-            futures.push(
-                ctx.discord_http
-                    .update_guild_member(member.guild_id, member.user.id)
-                    .mute(true),
-            )
-        }
-
-        futures::future::join_all(futures).await; // TODO: handle errors, particularly 429 ratelimits
-
-        if let Some(g) = ctx.game.write().await.as_mut() {
-            g.meeting_in_progress = false
-        }
-    }
-
-    Ok(())
-}
-
-async fn emergency_meeting(ctx: Context) -> Result<()> {
-    let living_channel = ctx.cache.guild_channel(ctx.config.living_channel).unwrap();
-    let dead_channel = ctx.cache.guild_channel(ctx.config.dead_channel).unwrap();
-
-    let mut futures = Vec::new();
-
-    for member in get_members_in_channel(&ctx, living_channel).await {
-        futures.push(
-            ctx.discord_http
-                .update_guild_member(member.guild_id, member.user.id)
-                .mute(false),
-        );
-    }
-
-    for member in get_members_in_channel(&ctx, dead_channel).await {
-        futures.push(
-            ctx.discord_http
-                .update_guild_member(member.guild_id, member.user.id)
-                .channel_id(ctx.config.living_channel)
-                .mute(true),
-        )
-    }
-
-    futures::future::join_all(futures).await; // TODO: handle errors, particularly 429 ratelimits
-
-    if let Some(g) = ctx.game.write().await.as_mut() {
-        g.meeting_in_progress = true
-    }
-
-    Ok(())
-}
-
-async fn end_game(ctx: Context) -> Result<()> {
-    let living_channel = ctx.cache.guild_channel(ctx.config.living_channel).unwrap();
-    let dead_channel = ctx.cache.guild_channel(ctx.config.dead_channel).unwrap();
-
-    let mut futures = Vec::new();
-
-    for member in get_members_in_channel(&ctx, living_channel).await {
-        futures.push(
-            ctx.discord_http
-                .update_guild_member(member.guild_id, member.user.id)
-                .mute(false),
-        );
-    }
-
-    for member in get_members_in_channel(&ctx, dead_channel).await {
-        futures.push(
-            ctx.discord_http
-                .update_guild_member(member.guild_id, member.user.id)
-                .channel_id(ctx.config.living_channel),
-        );
-    }
-
-    futures::future::join_all(futures).await; // TODO: handle errors, particularly 429 ratelimits
 
     Ok(())
 }
