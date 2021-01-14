@@ -18,7 +18,7 @@ use twilight_model::{channel::Message, channel::ReactionType, gateway::event::Ev
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
-const EMERGENCY_MEETING_EMOJI: &str = "🔴";
+const EMER_EMOJI: &str = "🔴";
 const DEAD_EMOJI: &str = "💀";
 
 #[tokio::main]
@@ -95,25 +95,24 @@ async fn main() -> Result<()> {
             Event::ReactionAdd(event) => {
                 let reaction = (*event).0;
 
-                match reaction.emoji {
-                    ReactionType::Unicode { ref name } if name == EMERGENCY_MEETING_EMOJI => {
-                        if context.is_reacting_to_control(&reaction).await
-                            && context.is_in_control(&reaction.user_id).await
-                        {
-                            context.emergency_meeting().await?;
+                if context.is_reacting_to_control(&reaction).await {
+                    match reaction.emoji {
+                        ReactionType::Unicode { ref name } if name == EMER_EMOJI => {
+                            if context.is_in_control(&reaction.user_id).await {
+                                context.emergency_meeting().await?;
+                            }
                         }
-                    }
-                    ReactionType::Unicode { ref name } if name == DEAD_EMOJI => {
-                        if context.is_reacting_to_control(&reaction).await {
+                        ReactionType::Unicode { ref name } if name == DEAD_EMOJI => {
                             context.make_dead(&reaction.user_id).await;
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
             Event::ReactionRemove(event) => {
                 let reaction = (*event).0;
-                if matches!(reaction.emoji, ReactionType::Unicode { ref name } if name == EMERGENCY_MEETING_EMOJI)
+                if matches!(reaction.emoji, ReactionType::Unicode { ref name } if name == EMER_EMOJI)
+                    && context.is_reacting_to_control(&reaction).await
                     && context.is_in_control(&reaction.user_id).await
                 {
                     context.mute_players().await?;
@@ -139,13 +138,13 @@ async fn process_command(mut ctx: Context, parser: Parser<'_>, msg: Message) -> 
                 r#"A game is in progress, {} can react to this message with {} to call a meeting.
 Anyone can react to this message with {} to access dead chat after the next meeting"#,
                 msg.author.mention(),
-                EMERGENCY_MEETING_EMOJI,
+                EMER_EMOJI,
                 DEAD_EMOJI
             ))?
             .await?;
 
             let emer_emoji = RequestReactionType::Unicode {
-                name: EMERGENCY_MEETING_EMOJI.into(),
+                name: EMER_EMOJI.into(),
             };
             ctx.discord_http
                 .create_reaction(ctrl_msg.channel_id, ctrl_msg.id, emer_emoji)
