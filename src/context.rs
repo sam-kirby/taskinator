@@ -120,6 +120,10 @@ impl Context {
         });
     }
 
+    pub async fn is_game_in_progress(&self) -> bool {
+        self.game.read().await.is_some()
+    }
+
     pub async fn get_members_in_channel(
         &self,
         voice_channel: Arc<GuildChannel>,
@@ -139,38 +143,41 @@ impl Context {
             .cache
             .guild_channel(self.config.living_channel)
             .unwrap();
-        for member in self.get_members_in_channel(living_channel).await {
-            let mut futures = Vec::new();
 
-            if self
-                .game
-                .read()
+        let (alive_players, dead_players): (Vec<_>, Vec<_>) = {
+            let game_lock = self.game.read().await;
+            let game = game_lock.as_ref().unwrap();
+
+            self.get_members_in_channel(living_channel)
                 .await
-                .as_ref()
-                .unwrap()
-                .dead
-                .contains(&member.user.id)
-            {
-                futures.push(
-                    self.discord_http
-                        .update_guild_member(member.guild_id, member.user.id)
-                        .channel_id(self.config.dead_channel)
-                        .mute(false),
-                );
-            } else {
-                futures.push(
-                    self.discord_http
-                        .update_guild_member(member.guild_id, member.user.id)
-                        .mute(true),
-                )
-            }
+                .into_iter()
+                .partition(|p| !game.dead.contains(&p.user.id))
+        };
 
-            self.batch(futures).await;
+        let mut futures = Vec::new();
 
-            if let Some(g) = self.game.write().await.as_mut() {
-                g.meeting_in_progress = false
-            }
+        for player in alive_players {
+            futures.push(
+                self.discord_http
+                    .update_guild_member(player.guild_id, player.user.id)
+                    .mute(true),
+            );
         }
+
+        for player in dead_players {
+            futures.push(
+                self.discord_http
+                    .update_guild_member(player.guild_id, player.user.id)
+                    .channel_id(self.config.dead_channel)
+                    .mute(false),
+            );
+        }
+
+        self.batch(futures).await;
+
+        let mut game_lock = self.game.write().await;
+        let g = game_lock.as_mut().expect("expected game");
+        g.meeting_in_progress = false;
 
         Ok(())
     }
@@ -184,12 +191,20 @@ impl Context {
 
         let mut futures = Vec::new();
 
-        for member in self.get_members_in_channel(living_channel).await {
-            futures.push(
-                self.discord_http
-                    .update_guild_member(member.guild_id, member.user.id)
-                    .mute(false),
-            );
+        {
+            let game_lock = self.game.read().await;
+            let game = game_lock.as_ref().unwrap();
+
+            for member in self.get_members_in_channel(living_channel).await {
+                if game.dead.contains(&member.user.id) {
+                    continue;
+                }
+                futures.push(
+                    self.discord_http
+                        .update_guild_member(member.guild_id, member.user.id)
+                        .mute(false),
+                );
+            }
         }
 
         for member in self.get_members_in_channel(dead_channel).await {
@@ -203,9 +218,9 @@ impl Context {
 
         self.batch(futures).await;
 
-        if let Some(g) = self.game.write().await.as_mut() {
-            g.meeting_in_progress = true
-        }
+        let mut game_lock = self.game.write().await;
+        let g = game_lock.as_mut().expect("expected game");
+        g.meeting_in_progress = true;
 
         Ok(())
     }

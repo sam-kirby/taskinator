@@ -220,10 +220,13 @@ Anyone can react to this message with {} to access dead chat after the next meet
                 .delete_message(msg.channel_id, msg.id)
                 .await?;
 
+            if ctx.is_game_in_progress().await {
+                ctx.end_game().await?;
+            }
+
             ctx.shard.shutdown();
         }
-        Some(_) => {}
-        None => {}
+        _ => {}
     }
 
     Ok(())
