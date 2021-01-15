@@ -135,7 +135,11 @@ async fn main() -> Result<()> {
 
 async fn process_command(mut ctx: Context, parser: Parser<'_>, msg: Message) -> Result<()> {
     match parser.parse(&msg.content) {
-        Some(Command { name: "new", .. }) => {
+        Some(Command {
+            name: "new",
+            mut arguments,
+            ..
+        }) => {
             ctx.discord_http
                 .delete_message(msg.channel_id, msg.id)
                 .await?;
@@ -167,7 +171,15 @@ Anyone can react to this message with {} to access dead chat after the next meet
 
             ctx.start_game(&ctrl_msg, msg.guild_id.unwrap()).await;
 
-            sleep(Duration::from_secs(5)).await;
+            let duration = match arguments.next().and_then(|s| s.parse().ok()) {
+                Some(time) if time == 0 => None,
+                Some(time) => Some(Duration::from_secs(time)),
+                None => Some(Duration::from_secs(5)),
+            };
+
+            if let Some(duration) = duration {
+                sleep(duration).await;
+            }
 
             ctx.mute_players().await?;
         }
