@@ -168,8 +168,7 @@ Anyone can react to this message with {} to access dead chat after the next meet
                 .delete_message(msg.channel_id, msg.id)
                 .await?;
 
-            let auth = ctx.is_in_control(&msg.author.id).await;
-            if auth {
+            if ctx.is_in_control(&msg.author.id).await {
                 ctx.end_game().await?;
             }
         }
@@ -182,8 +181,7 @@ Anyone can react to this message with {} to access dead chat after the next meet
                 .delete_message(msg.channel_id, msg.id)
                 .await?;
 
-            let auth = ctx.is_in_control(&msg.author.id).await;
-            if auth {
+            if ctx.is_in_control(&msg.author.id).await {
                 match arguments.next().map(UserId::parse) {
                     Some(Ok(target)) => {
                         let reply = ctx
@@ -219,12 +217,14 @@ Anyone can react to this message with {} to access dead chat after the next meet
             ctx.discord_http
                 .delete_message(msg.channel_id, msg.id)
                 .await?;
-
-            if ctx.is_game_in_progress().await {
-                ctx.end_game().await?;
+            
+            if ctx.is_in_control(&msg.author.id).await {
+                if ctx.is_game_in_progress().await {
+                    ctx.end_game().await?;
+                }
+    
+                ctx.shard.shutdown();
             }
-
-            ctx.shard.shutdown();
         }
         _ => {}
     }
