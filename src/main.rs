@@ -7,7 +7,7 @@ use config::Config;
 use context::Context;
 
 use futures::StreamExt;
-use tokio::time::sleep;
+use tokio::{task::JoinHandle, time::sleep};
 use tracing::error;
 use twilight_cache_inmemory::{InMemoryCache as DiscordCache, ResourceType};
 use twilight_command_parser::{Command, CommandParserConfig, Parser};
@@ -34,6 +34,7 @@ async fn main() -> Result<()> {
                 | ResourceType::GUILD
                 | ResourceType::MEMBER
                 | ResourceType::USER
+                | ResourceType::USER_CURRENT
                 | ResourceType::VOICE_STATE,
         )
         .build();
@@ -69,6 +70,7 @@ async fn main() -> Result<()> {
         | EventTypeFlags::MESSAGE_DELETE
         | EventTypeFlags::REACTION_ADD
         | EventTypeFlags::REACTION_REMOVE
+        | EventTypeFlags::READY
         | EventTypeFlags::VOICE_STATE_UPDATE;
 
     let mut events = shard.some_events(event_flags);
@@ -91,18 +93,18 @@ async fn main() -> Result<()> {
         context.cache.update(&event);
 
         match event {
-            Event::MessageCreate(event) => {
+            Event::MessageCreate(message) if !message.author.bot => {
                 let context_clone = context.clone();
                 let parser_clone = parser.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = process_command(context_clone, parser_clone, (*event).0).await {
+                    if let Err(e) = process_command(context_clone, parser_clone, &message).await {
                         error!("{}", e);
                     }
                 });
             }
-            Event::ReactionAdd(event) => {
-                let reaction = (*event).0;
-
+            Event::ReactionAdd(reaction)
+                if reaction.user_id != context.cache.current_user().unwrap().id =>
+            {
                 if context.is_reacting_to_control(&reaction).await {
                     match reaction.emoji {
                         ReactionType::Unicode { ref name } if name == EMER_EMOJI => {
@@ -117,8 +119,9 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            Event::ReactionRemove(event) => {
-                let reaction = (*event).0;
+            Event::ReactionRemove(reaction)
+                if reaction.user_id != context.cache.current_user().unwrap().id =>
+            {
                 if matches!(reaction.emoji, ReactionType::Unicode { ref name } if name == EMER_EMOJI)
                     && context.is_reacting_to_control(&reaction).await
                     && context.is_in_control(&reaction.user_id).await
@@ -133,7 +136,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn process_command(mut ctx: Context, parser: Parser<'_>, msg: Message) -> Result<()> {
+async fn process_command(mut ctx: Context, parser: Parser<'_>, msg: &Message) -> Result<()> {
     match parser.parse(&msg.content) {
         Some(Command {
             name: "new",
@@ -155,19 +158,28 @@ Anyone can react to this message with {} to access dead chat after the next meet
             ))?
             .await?;
 
-            let emer_emoji = RequestReactionType::Unicode {
-                name: EMER_EMOJI.into(),
-            };
-            ctx.discord_http
-                .create_reaction(ctrl_msg.channel_id, ctrl_msg.id, emer_emoji)
-                .await?;
+            let reaction_ctx = ctx.clone();
+            let reaction_ctrl_msg = ctrl_msg.clone();
 
-            let dead_emoji = RequestReactionType::Unicode {
-                name: DEAD_EMOJI.into(),
-            };
-            ctx.discord_http
-                .create_reaction(ctrl_msg.channel_id, ctrl_msg.id, dead_emoji)
-                .await?;
+            let res: JoinHandle<Result<()>> = tokio::spawn(async move {
+                let emojis = vec![
+                    RequestReactionType::Unicode {
+                        name: EMER_EMOJI.into(),
+                    },
+                    RequestReactionType::Unicode {
+                        name: DEAD_EMOJI.into(),
+                    },
+                ];
+
+                for emoji in emojis {
+                    reaction_ctx
+                        .discord_http
+                        .create_reaction(reaction_ctrl_msg.channel_id, reaction_ctrl_msg.id, emoji)
+                        .await?;
+                }
+
+                Ok(())
+            });
 
             ctx.start_game(&ctrl_msg, msg.author.id, msg.guild_id.unwrap())
                 .await;
@@ -183,6 +195,8 @@ Anyone can react to this message with {} to access dead chat after the next meet
             }
 
             ctx.mute_players().await?;
+
+            res.await??;
         }
         Some(Command { name: "end", .. }) => {
             ctx.discord_http
