@@ -141,16 +141,18 @@ async fn process_command(mut ctx: Context, parser: Parser<'_>, msg: &Message) ->
                 .delete_message(msg.channel_id, msg.id)
                 .await?;
 
-            let ctrl_msg = ctx.discord_http
-            .create_message(msg.channel_id)
-            .content(format!(
-                r#"A game is in progress, {} can react to this message with {} to call a meeting.
-Anyone can react to this message with {} to access dead chat after the next meeting"#,
-                msg.author.mention(),
-                EMER_EMOJI,
-                DEAD_EMOJI
-            ))?
-            .await?;
+            let ctrl_msg = ctx
+                .discord_http
+                .create_message(msg.channel_id)
+                .content(format!(
+                    "A game is in progress, {} can react to this message with {} to call a \
+                     meeting.\nAnyone can react to this message with {} to access dead chat after \
+                     the next meeting",
+                    msg.author.mention(),
+                    EMER_EMOJI,
+                    DEAD_EMOJI
+                ))?
+                .await?;
 
             let reaction_ctx = ctx.clone();
             let reaction_ctrl_msg = ctrl_msg.clone();
@@ -234,7 +236,12 @@ Anyone can react to this message with {} to access dead chat after the next meet
                     }
                 }
             } else if let Some(broadcast) = ctx.broadcast().await {
-                broadcast.content("You must have started the game or be an owner of the bot to make others dead\nTo make yourself dead, please use the reactions")?.await?;
+                broadcast
+                    .content(
+                        "You must have started the game or be an owner of the bot to make others \
+                         dead\nTo make yourself dead, please use the reactions",
+                    )?
+                    .await?;
             } else {
                 ctx.discord_http
                     .create_message(msg.channel_id)
