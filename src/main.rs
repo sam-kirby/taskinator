@@ -34,14 +34,13 @@ async fn main() -> Result<()> {
                 | ResourceType::GUILD
                 | ResourceType::MEMBER
                 | ResourceType::USER
-                | ResourceType::USER_CURRENT
                 | ResourceType::VOICE_STATE,
         )
         .build();
 
     let discord_http = DiscordHttp::new(&config.token);
 
-    let owners = {
+    let (owners, current_user) = {
         let mut owners = HashSet::new();
 
         let app_info = discord_http.current_user_application().await?;
@@ -50,7 +49,7 @@ async fn main() -> Result<()> {
         } else {
             owners.insert(app_info.owner.id);
         }
-        owners
+        (owners, UserId(app_info.id.0))
     };
 
     let mut shard = Shard::new(
@@ -70,7 +69,6 @@ async fn main() -> Result<()> {
         | EventTypeFlags::MESSAGE_DELETE
         | EventTypeFlags::REACTION_ADD
         | EventTypeFlags::REACTION_REMOVE
-        | EventTypeFlags::READY
         | EventTypeFlags::VOICE_STATE_UPDATE;
 
     let mut events = shard.some_events(event_flags);
@@ -102,9 +100,7 @@ async fn main() -> Result<()> {
                     }
                 });
             }
-            Event::ReactionAdd(reaction)
-                if reaction.user_id != context.cache.current_user().unwrap().id =>
-            {
+            Event::ReactionAdd(reaction) if reaction.user_id != current_user => {
                 if context.is_reacting_to_control(&reaction).await {
                     match reaction.emoji {
                         ReactionType::Unicode { ref name } if name == EMER_EMOJI => {
@@ -119,9 +115,7 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            Event::ReactionRemove(reaction)
-                if reaction.user_id != context.cache.current_user().unwrap().id =>
-            {
+            Event::ReactionRemove(reaction) if reaction.user_id != current_user => {
                 if matches!(reaction.emoji, ReactionType::Unicode { ref name } if name == EMER_EMOJI)
                     && context.is_reacting_to_control(&reaction).await
                     && context.is_in_control(&reaction.user_id).await
