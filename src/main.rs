@@ -9,7 +9,7 @@ use context::Context;
 use futures::StreamExt;
 use tokio::time::sleep;
 use tracing::error;
-use twilight_cache_inmemory::InMemoryCache as DiscordCache;
+use twilight_cache_inmemory::{InMemoryCache as DiscordCache, ResourceType};
 use twilight_command_parser::{Command, CommandParserConfig, Parser};
 use twilight_gateway::{shard::Shard, EventTypeFlags, Intents};
 use twilight_http::{request::channel::reaction::RequestReactionType, Client as DiscordHttp};
@@ -28,7 +28,15 @@ async fn main() -> Result<()> {
 
     let config = Config::from_file("./config.toml").await?;
 
-    let cache = DiscordCache::builder().message_cache_size(5).build();
+    let cache = DiscordCache::builder()
+        .resource_types(
+            ResourceType::CHANNEL
+                | ResourceType::GUILD
+                | ResourceType::MEMBER
+                | ResourceType::USER
+                | ResourceType::VOICE_STATE,
+        )
+        .build();
 
     let discord_http = DiscordHttp::new(&config.token);
 
@@ -217,12 +225,12 @@ Anyone can react to this message with {} to access dead chat after the next meet
             ctx.discord_http
                 .delete_message(msg.channel_id, msg.id)
                 .await?;
-            
+
             if ctx.is_in_control(&msg.author.id).await {
                 if ctx.is_game_in_progress().await {
                     ctx.end_game().await?;
                 }
-    
+
                 ctx.shard.shutdown();
             }
         }
