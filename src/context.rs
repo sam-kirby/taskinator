@@ -109,12 +109,12 @@ impl Context {
             .map_or(false, |g| g.ctrl_msg == reaction.message_id)
     }
 
-    pub async fn start_game(&mut self, msg: &Message, guild_id: GuildId) {
+    pub async fn start_game(&mut self, msg: &Message, ctrl_user: UserId, guild_id: GuildId) {
         self.game.write().await.replace(Game {
             dead: HashSet::new(),
             ctrl_channel: msg.channel_id,
             ctrl_msg: msg.id,
-            ctrl_user: msg.author.id,
+            ctrl_user,
             guild_id,
             meeting_in_progress: false,
         });

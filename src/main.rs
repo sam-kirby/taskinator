@@ -169,7 +169,8 @@ Anyone can react to this message with {} to access dead chat after the next meet
                 .create_reaction(ctrl_msg.channel_id, ctrl_msg.id, dead_emoji)
                 .await?;
 
-            ctx.start_game(&ctrl_msg, msg.guild_id.unwrap()).await;
+            ctx.start_game(&ctrl_msg, msg.author.id, msg.guild_id.unwrap())
+                .await;
 
             let duration = match arguments.next().and_then(|s| s.parse().ok()) {
                 Some(time) if time == 0 => None,
