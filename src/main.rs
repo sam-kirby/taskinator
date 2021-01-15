@@ -73,7 +73,7 @@ async fn main() -> Result<()> {
 
     let mut events = shard.some_events(event_flags);
 
-    let mut context = Context::new(config, discord_http, cache, shutdown_handle, owners);
+    let context = Context::new(config, discord_http, cache, shutdown_handle, owners);
 
     let parser = {
         let mut parser_config = CommandParserConfig::new();
@@ -130,7 +130,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn process_command(mut ctx: Context, parser: Parser<'_>, msg: &Message) -> Result<()> {
+async fn process_command(ctx: Context, parser: Parser<'_>, msg: &Message) -> Result<()> {
     match parser.parse(&msg.content) {
         Some(Command {
             name: "new",
@@ -212,36 +212,33 @@ async fn process_command(mut ctx: Context, parser: Parser<'_>, msg: &Message) ->
                 .delete_message(msg.channel_id, msg.id)
                 .await?;
 
-            if ctx.is_in_control(&msg.author.id).await {
-                match arguments.next().map(UserId::parse) {
-                    Some(Ok(target)) => {
-                        let reply = ctx
-                            .broadcast()
-                            .await
-                            .unwrap()
-                            .content(format!("deadifying {}", target.mention()))?
-                            .await?;
-                        ctx.make_dead(&target).await;
-                        sleep(Duration::from_secs(5)).await;
-                        ctx.discord_http
-                            .delete_message(reply.channel_id, reply.id)
-                            .await?;
+            if let Some(broadcast) = ctx.broadcast().await {
+                if ctx.is_in_control(&msg.author.id).await {
+                    match arguments.next().map(UserId::parse) {
+                        Some(Ok(target)) => {
+                            let reply = broadcast
+                                .content(format!("deadifying {}", target.mention()))?
+                                .await?;
+                            ctx.make_dead(&target).await;
+                            sleep(Duration::from_secs(5)).await;
+                            ctx.discord_http
+                                .delete_message(reply.channel_id, reply.id)
+                                .await?;
+                        }
+                        _ => {
+                            broadcast
+                                .content("You must mention the user you wish to die")?
+                                .await?;
+                        }
                     }
-                    _ => {
-                        ctx.broadcast()
-                            .await
-                            .unwrap()
-                            .content("You must mention the user you wish to die")?
-                            .await?;
-                    }
+                } else {
+                    broadcast
+                        .content(
+                            "You must have started the game or be an owner of the bot to make \
+                             others dead\nTo make yourself dead, please use the reactions",
+                        )?
+                        .await?;
                 }
-            } else if let Some(broadcast) = ctx.broadcast().await {
-                broadcast
-                    .content(
-                        "You must have started the game or be an owner of the bot to make others \
-                         dead\nTo make yourself dead, please use the reactions",
-                    )?
-                    .await?;
             } else {
                 ctx.discord_http
                     .create_message(msg.channel_id)

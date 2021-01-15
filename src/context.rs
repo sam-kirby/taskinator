@@ -76,7 +76,7 @@ impl Context {
         }
     }
 
-    pub async fn make_dead(&mut self, target: &UserId) {
+    pub async fn make_dead(&self, target: &UserId) {
         if let Some(game) = self.game.write().await.as_mut() {
             if game.dead.insert(*target) && game.meeting_in_progress {
                 if let Err(why) = self
@@ -109,7 +109,7 @@ impl Context {
             .map_or(false, |g| g.ctrl_msg == reaction.message_id)
     }
 
-    pub async fn start_game(&mut self, msg: &Message, ctrl_user: UserId, guild_id: GuildId) {
+    pub async fn start_game(&self, msg: &Message, ctrl_user: UserId, guild_id: GuildId) {
         self.game.write().await.replace(Game {
             dead: HashSet::new(),
             ctrl_channel: msg.channel_id,
@@ -225,7 +225,7 @@ impl Context {
         Ok(())
     }
 
-    pub async fn end_game(&mut self) -> Result<()> {
+    pub async fn end_game(&self) -> Result<()> {
         if let Some(game) = self.game.write().await.take() {
             self.discord_http
                 .delete_message(game.ctrl_channel, game.ctrl_msg)
