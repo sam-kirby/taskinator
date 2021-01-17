@@ -46,7 +46,10 @@ async fn bot_main() -> Result<()> {
                 let bot_clone = bot.clone();
                 tokio::spawn(async move {
                     if let Err(e) = bot_clone.process_command(&message).await {
-                        error!("Error processing command\nMessage: {:?}\nError: {}", &message, e);
+                        error!(
+                            "Error processing command\nMessage: {:?}\nError: {}",
+                            &message, e
+                        );
                     }
                 });
             }

@@ -5,10 +5,10 @@ use crate::{
 };
 
 use std::{
-    collections::HashSet, path::Path, result::Result as StdResult, sync::Arc, time::Duration,
+    collections::HashSet, future::Future, path::Path, result::Result as StdResult, sync::Arc,
+    time::Duration,
 };
 
-use futures::Future;
 use tokio::{signal::ctrl_c, sync::RwLock, task::JoinHandle, time::sleep};
 use tracing::error;
 use twilight_cache_inmemory::{model::CachedMember, InMemoryCache as DiscordCache, ResourceType};

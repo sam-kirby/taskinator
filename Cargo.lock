@@ -7,28 +7,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee2a4ec343196209d6594e19543ae87a39f96d5534d7174822a3ad825dd6ed7e"
 
 [[package]]
-name = "among-us"
-version = "0.1.0"
-dependencies = [
- "futures",
- "serde",
- "tokio",
- "tokio-stream",
- "toml",
- "tracing",
- "tracing-subscriber",
- "twilight-cache-inmemory",
- "twilight-command-parser",
- "twilight-embed-builder",
- "twilight-gateway",
- "twilight-http",
- "twilight-mention",
- "twilight-model",
- "twilight-standby",
- "twilight-util",
-]
-
-[[package]]
 name = "ansi_term"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1083,6 +1061,28 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-xid",
+]
+
+[[package]]
+name = "taskinator"
+version = "0.2.0"
+dependencies = [
+ "futures",
+ "serde",
+ "tokio",
+ "tokio-stream",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "twilight-cache-inmemory",
+ "twilight-command-parser",
+ "twilight-embed-builder",
+ "twilight-gateway",
+ "twilight-http",
+ "twilight-mention",
+ "twilight-model",
+ "twilight-standby",
+ "twilight-util",
 ]
 
 [[package]]
