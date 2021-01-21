@@ -1,6 +1,6 @@
 [package]
 name = "taskinator"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Sam Kirby <sam.kirby94@hotmail.co.uk>"]
 edition = "2018"
 license = "AGPL-3.0-or-later"
@@ -9,6 +9,7 @@ license = "AGPL-3.0-or-later"
 
 [dependencies]
 futures = "0.3"
+parking_lot = "0.11"
 tokio-stream = "0.1"
 toml = "0.5"
 tracing = "0.1"
