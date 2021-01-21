@@ -47,7 +47,7 @@ pub struct Bot<'p> {
     shard: Shard,
 }
 
-impl<'p> Bot<'p> {
+impl Bot<'_> {
     pub fn new(config_path: impl AsRef<Path>) -> Result<Self> {
         let config = Arc::new(Config::from_file(config_path)?);
 
@@ -144,7 +144,7 @@ impl<'p> Bot<'p> {
             .expect("Expected bot ID - must fetch app info first!")
     }
 
-    pub async fn process_command(&'p self, msg: &Message) -> Result<()> {
+    pub async fn process_command(&self, msg: &Message) -> Result<()> {
         match self.parser.parse(&msg.content) {
             Some(Command {
                 name: "new",
