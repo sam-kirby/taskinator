@@ -113,7 +113,7 @@ jobs:
     
     - name: Zip
       run: |
-        7z a -tzip ${{ github.workspace }}/taskinator-${{ runner.os }}-${{ github.sha }}.zip ${{ github.workspace }}/target/release/taskinator
+        mv ${{ github.workspace }}/target/release/taskinator ${{ github.workspace }}/taskinator-${{ runner.os }}
 
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
@@ -121,8 +121,8 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ needs.release.outputs.upload_url }}
-        asset_path: ${{ github.workspace }}/taskinator-${{ runner.os }}-${{ github.sha }}.zip
-        asset_name: taskinator-${{ runner.os }}-${{ github.sha }}.zip
+        asset_path: ${{ github.workspace }}/taskinator-${{ runner.os }}
+        asset_name: taskinator-${{ runner.os }}
         asset_content_type: application/octet-stream
 
   build_win:
@@ -159,7 +159,7 @@ jobs:
     
     - name: Zip
       run: |
-        7z a -tzip ${{ github.workspace }}/taskinator-${{ runner.os }}-${{ github.sha }}.zip ${{ github.workspace }}/target/release/taskinator.exe
+        mv ${{ github.workspace }}/target/release/taskinator.exe ${{ github.workspace }}/taskinator-${{ runner.os }}.exe
 
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
@@ -167,6 +167,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ needs.release.outputs.upload_url }}
-        asset_path: ${{ github.workspace }}/taskinator-${{ runner.os }}-${{ github.sha }}.zip
-        asset_name: taskinator-${{ runner.os }}-${{ github.sha }}.zip
+        asset_path: ${{ github.workspace }}/taskinator-${{ runner.os }}.exe
+        asset_name: taskinator-${{ runner.os }}.exe
         asset_content_type: application/octet-stream
