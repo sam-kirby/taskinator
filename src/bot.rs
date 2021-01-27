@@ -5,13 +5,12 @@ use crate::{
 };
 
 use std::{
-    collections::HashSet, future::Future, path::Path, result::Result as StdResult, sync::Arc,
-    time::Duration,
+    collections::HashSet, fmt::Debug, future::Future, path::Path, sync::Arc, time::Duration,
 };
 
 use parking_lot::RwLock;
 use tokio::{signal::ctrl_c, task::JoinHandle, time::sleep};
-use tracing::error;
+use tracing::{debug, error, info, warn};
 use twilight_cache_inmemory::{model::CachedMember, InMemoryCache as DiscordCache, ResourceType};
 use twilight_command_parser::{Arguments, Command, CommandParserConfig, Parser};
 use twilight_gateway::{shard::Events, Event, EventTypeFlags, Intents, Shard};
@@ -226,6 +225,8 @@ impl Bot<'_> {
     }
 
     async fn begin_game(&self, msg: &Message, mut args: Arguments<'_>) -> Result<()> {
+        info!("Initiating new game");
+
         let ctrl_msg = self
             .discord_http
             .create_message(msg.channel_id)
@@ -289,6 +290,8 @@ impl Bot<'_> {
     }
 
     async fn end_game(&self) -> Result<()> {
+        info!("Ending game");
+
         let game = self.game.write().take();
         if let Some(game) = game {
             self.discord_http
@@ -328,6 +331,8 @@ impl Bot<'_> {
     }
 
     async fn begin_meeting(&self) -> Result<()> {
+        debug!("Meeting initiated");
+
         let living_channel = self
             .cache
             .guild_channel(self.config.living_channel)
@@ -371,6 +376,8 @@ impl Bot<'_> {
     }
 
     async fn end_meeting(&self) -> Result<()> {
+        debug!("Ending meeting");
+
         let living_channel = self
             .cache
             .guild_channel(self.config.living_channel)
@@ -457,6 +464,17 @@ impl Bot<'_> {
         if let Some(game) = self.game.write().as_mut() {
             if game.dead.insert(target) && game.meeting_in_progress {
                 let guild_id = game.guild_id;
+
+                if let Some(target_member) = self.cache.member(guild_id, target) {
+                    let name = match &target_member.nick {
+                        Some(nick) => nick,
+                        None => &target_member.user.name,
+                    };
+                    info!("{} is now dead", name);
+                } else {
+                    warn!("{} is now dead\t!!cache miss!!", target);
+                }
+
                 fut = Some(
                     self.discord_http
                         .update_guild_member(guild_id, target)
@@ -472,15 +490,21 @@ impl Bot<'_> {
         }
     }
 
-    async fn batch<F, O>(&self, futs: Vec<F>)
+    async fn batch<Fut, Out>(&self, futs: Vec<Fut>) -> Vec<Out>
     where
-        F: Future<Output = TwiResult<O>>,
+        Fut: Future<Output = TwiResult<Out>>,
+        Out: Debug,
     {
-        let errors = futures::future::join_all(futs)
+        let (successes, errors) = futures::future::join_all(futs)
             .await
             .into_iter()
-            .filter_map(StdResult::err)
+            .partition::<Vec<_>, _>(TwiResult::is_ok);
+
+        let errors = errors
+            .into_iter()
+            .map(TwiResult::unwrap_err)
             .collect::<Vec<_>>();
+
         if !errors.is_empty() {
             let channel = self.game.read().as_ref().map(|g| g.ctrl_channel);
             if let Some(channel) = channel {
@@ -495,6 +519,8 @@ impl Bot<'_> {
                 error!("{}", error);
             }
         }
+
+        successes.into_iter().map(TwiResult::unwrap).collect()
     }
 
     fn broadcast(&self) -> Option<CreateMessage<'_>> {
