@@ -1,6 +1,6 @@
 [package]
 name = "taskinator"
-version = "0.2.2"
+version = "0.3.0-alpha"
 authors = ["Sam Kirby <sam.kirby94@hotmail.co.uk>"]
 edition = "2018"
 license = "AGPL-3.0-or-later"
@@ -12,6 +12,8 @@ lto = true
 [dependencies]
 futures = "0.3"
 parking_lot = "0.11"
+sysinfo = "0.16"
+taskinator-communicator = { path = "../taskinator-communicator" }
 tokio-stream = "0.1"
 toml = "0.5"
 tracing = "0.1"
@@ -32,4 +34,4 @@ features = ["derive"]
 
 [dependencies.tokio]
 version = "1"
-features = ["rt-multi-thread", "signal", "sync", "time"]
+features = ["rt-multi-thread", "macros", "signal", "sync", "time"]
