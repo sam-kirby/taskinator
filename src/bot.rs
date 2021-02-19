@@ -53,7 +53,10 @@ impl Builder {
 
         let discord_gateway = Shard::new(
             &config.token,
-            Intents::GUILDS | Intents::GUILD_MESSAGES | Intents::GUILD_VOICE_STATES,
+            Intents::GUILDS
+                | Intents::GUILD_MEMBERS
+                | Intents::GUILD_MESSAGES
+                | Intents::GUILD_VOICE_STATES,
         );
 
         let (broadcast_channel, living_channel, dead_channel) = (
@@ -205,6 +208,8 @@ impl Bot {
         self.discord_gateway.start().await?;
 
         let event_flags: EventTypeFlags = EventTypeFlags::GUILD_CREATE
+            | EventTypeFlags::MESSAGE_CREATE
+            | EventTypeFlags::MEMBER_UPDATE
             | EventTypeFlags::MESSAGE_CREATE
             | EventTypeFlags::VOICE_STATE_UPDATE;
 
