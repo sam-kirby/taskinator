@@ -350,10 +350,8 @@ impl Bot {
                     .partition::<Vec<_>, _>(|p| p.impostor);
 
                 imposters.is_empty() || imposters.len() >= crew.len()
-            } else if !matches!(state.as_ref(), Some(State::InGame { .. })) {
-                true
             } else {
-                false
+                !matches!(state.as_ref(), Some(State::InGame { .. }))
             }
         };
 
