@@ -4,12 +4,13 @@ use std::{
     future::Future,
     path::Path,
     sync::Arc,
+    time::Duration,
 };
 
 use futures::StreamExt;
 use parking_lot::RwLock;
 use taskinator_communicator::game::{MeetingState, Player, State};
-use tokio::{signal::ctrl_c, sync::watch::Receiver};
+use tokio::{signal::ctrl_c, sync::watch::Receiver, time::sleep};
 use twilight_cache_inmemory::{model::CachedMember, InMemoryCache, ResourceType};
 use twilight_command_parser::{Arguments, Command, CommandParserConfig, Parser};
 use twilight_embed_builder::{EmbedBuilder, EmbedFieldBuilder};
@@ -241,11 +242,7 @@ impl Bot {
                     Some(State::InGame { .. }) => {
                         // In gameplay
                         if in_meeting {
-                            in_meeting = false;
-                            bot.end_meeting().await;
-                        }
-                        if !in_game {
-                            in_game = true;
+                            bot.end_meeting(&mut in_meeting, &mut in_game).await;
                         }
                     }
                     Some(State::Lobby { .. }) | Some(State::Menu) | None => {
@@ -333,8 +330,34 @@ impl Bot {
         self.batch(futs).await;
     }
 
-    async fn end_meeting(&self) {
+    async fn end_meeting(&self, in_meeting: &mut bool, in_game: &mut bool) {
         tracing::info!("End meeting");
+
+        sleep(Duration::from_secs(10)).await;
+
+        let game_over = {
+            let state = self.game_state_rx.borrow();
+
+            if let Some(State::InGame { players, .. }) = state.as_ref() {
+                let (imposters, crew) = players
+                    .iter()
+                    .filter(|p| !p.dead)
+                    .partition::<Vec<_>, _>(|p| p.impostor);
+
+                imposters.is_empty() || imposters.len() >= crew.len()
+            } else if !matches!(state.as_ref(), Some(State::InGame { .. })) {
+                true
+            } else {
+                false
+            }
+        };
+
+        if game_over {
+            *in_game = false;
+            return self.end_game().await;
+        }
+
+        *in_meeting = false;
 
         let futs = self
             .match_members_to_players(&self.get_members_in_channel(self.living_channel))
