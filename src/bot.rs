@@ -28,6 +28,13 @@ use crate::{
     Result,
 };
 
+enum BotState {
+    PreGame,
+    InGame,
+    InMeeting,
+    GameOver,
+}
+
 pub struct Builder {
     cache: InMemoryCache,
     discord_gateway: Shard,
@@ -114,7 +121,7 @@ impl Builder {
             .discord_client
             .channel(self.broadcast_channel)
             .await?
-            .unwrap()
+            .expect("Failed to retreive the broadcast channel")
         {
             if let GuildChannel::Text(tc) = channel {
                 tc
@@ -131,7 +138,7 @@ impl Builder {
             .discord_client
             .channel(self.living_channel)
             .await?
-            .unwrap()
+            .expect("Failed to retreive the living channel")
         {
             if let GuildChannel::Voice(vc) = channel {
                 vc
@@ -148,7 +155,7 @@ impl Builder {
             .discord_client
             .channel(self.dead_channel)
             .await?
-            .unwrap()
+            .expect("Failed to retreive the dead channel")
         {
             if let GuildChannel::Voice(vc) = channel {
                 vc
@@ -208,7 +215,7 @@ impl Bot {
         self.discord_gateway.start().await?;
 
         let event_flags: EventTypeFlags = EventTypeFlags::GUILD_CREATE
-            | EventTypeFlags::MESSAGE_CREATE
+            | EventTypeFlags::MEMBER_ADD
             | EventTypeFlags::MEMBER_UPDATE
             | EventTypeFlags::MESSAGE_CREATE
             | EventTypeFlags::VOICE_STATE_UPDATE;
@@ -217,8 +224,7 @@ impl Bot {
 
         let mut bot = self.clone();
         tokio::spawn(async move {
-            let mut in_meeting = true;
-            let mut in_game = false;
+            let mut bot_state = BotState::PreGame;
             loop {
                 if let Err(why) = bot.game_state_rx.changed().await {
                     tracing::error!("Game state receive failed: {}", why);
@@ -236,25 +242,31 @@ impl Bot {
                         ) =>
                     {
                         // In a meeting
-                        if !in_meeting {
-                            in_meeting = true;
+                        if matches!(bot_state, BotState::PreGame | BotState::InGame) {
+                            bot_state = BotState::InMeeting;
                             bot.start_meeting().await;
-                        }
-                        if !in_game {
-                            in_game = true;
                         }
                     }
                     Some(State::InGame { .. }) => {
                         // In gameplay
-                        if in_meeting {
-                            bot.end_meeting(&mut in_meeting, &mut in_game).await;
+                        match bot_state {
+                            BotState::InMeeting => {
+                                bot.end_meeting(&mut bot_state).await;
+                            }
+                            BotState::PreGame => {
+                                bot_state = BotState::InGame;
+                                bot.start_game().await;
+                            }
+                            _ => {}
                         }
                     }
                     Some(State::Lobby { .. }) | Some(State::Menu) | None => {
                         // No game running or crash
-                        if in_game {
-                            in_meeting = true;
-                            in_game = false;
+                        if matches!(
+                            bot_state,
+                            BotState::InGame | BotState::InMeeting | BotState::GameOver
+                        ) {
+                            bot_state = BotState::PreGame;
                             bot.end_game().await;
                         }
                     }
@@ -309,7 +321,7 @@ impl Bot {
 
         let mut futs = self
             .match_members_to_players(&self.get_members_in_channel(self.living_channel))
-            .unwrap()
+            .expect("failed to match players at start of meeting - this should not happen!")
             .iter()
             .filter_map(|(m, p)| match p {
                 Some(p) if !p.dead => Some(
@@ -335,7 +347,7 @@ impl Bot {
         self.batch(futs).await;
     }
 
-    async fn end_meeting(&self, in_meeting: &mut bool, in_game: &mut bool) {
+    async fn end_meeting(&self, bot_state: &mut BotState) {
         tracing::info!("End meeting");
 
         sleep(Duration::from_secs(10)).await;
@@ -343,7 +355,7 @@ impl Bot {
         let game_over = {
             let state = self.game_state_rx.borrow();
 
-            if let Some(State::InGame { players, .. }) = state.as_ref() {
+            if let Some(State::InGame { players, .. }) = &*state {
                 let (imposters, crew) = players
                     .iter()
                     .filter(|p| !p.dead)
@@ -351,38 +363,25 @@ impl Bot {
 
                 imposters.is_empty() || imposters.len() >= crew.len()
             } else {
-                !matches!(state.as_ref(), Some(State::InGame { .. }))
+                !matches!(*state, Some(State::InGame { .. }))
             }
         };
 
         if game_over {
-            *in_game = false;
+            tracing::info!("Game is, in fact, over");
+            *bot_state = BotState::GameOver;
             return self.end_game().await;
         }
 
-        *in_meeting = false;
+        *bot_state = BotState::InGame;
 
-        let futs = self
-            .match_members_to_players(&self.get_members_in_channel(self.living_channel))
-            .unwrap()
-            .iter()
-            .filter_map(|(m, p)| match p {
-                Some(p) if p.dead => Some(
-                    self.discord_client
-                        .update_guild_member(m.guild_id, m.user.id)
-                        .channel_id(self.dead_channel)
-                        .mute(false),
-                ),
-                Some(p) if !p.dead => Some(
-                    self.discord_client
-                        .update_guild_member(m.guild_id, m.user.id)
-                        .mute(true),
-                ),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        self.mute_players().await;
+    }
 
-        self.batch(futs).await;
+    async fn start_game(&self) {
+        tracing::info!("START GAME!");
+
+        self.mute_players().await;
     }
 
     async fn end_game(&self) {
@@ -413,6 +412,30 @@ impl Bot {
                         .channel_id(self.living_channel)
                 }),
         );
+
+        self.batch(futs).await;
+    }
+
+    async fn mute_players(&self) {
+        let futs = self
+            .match_members_to_players(&self.get_members_in_channel(self.living_channel))
+            .expect("failed to match players at end of meeting - this should not happen!")
+            .iter()
+            .filter_map(|(m, p)| match p {
+                Some(p) if p.dead => Some(
+                    self.discord_client
+                        .update_guild_member(m.guild_id, m.user.id)
+                        .channel_id(self.dead_channel)
+                        .mute(false),
+                ),
+                Some(p) if !p.dead => Some(
+                    self.discord_client
+                        .update_guild_member(m.guild_id, m.user.id)
+                        .mute(true),
+                ),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
 
         self.batch(futs).await;
     }
@@ -516,7 +539,7 @@ impl Bot {
         members: &[Arc<CachedMember>],
     ) -> Option<Vec<(Arc<CachedMember>, Option<Player>)>> {
         let game_state = self.game_state_rx.borrow();
-        let players = match game_state.as_ref() {
+        let players = match &*game_state {
             Some(State::Lobby { players }) | Some(State::InGame { players, .. }) => Some(players),
             Some(_) | None => None,
         };
