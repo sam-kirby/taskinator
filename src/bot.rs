@@ -262,12 +262,13 @@ impl Bot {
                     }
                     Some(State::Lobby { .. }) | Some(State::Menu) | None => {
                         // No game running or crash
-                        if matches!(
-                            bot_state,
-                            BotState::InGame | BotState::InMeeting | BotState::GameOver
-                        ) {
+                        if matches!(bot_state, BotState::InGame | BotState::InMeeting) {
                             bot_state = BotState::PreGame;
                             bot.end_game().await;
+                        }
+
+                        if matches!(bot_state, BotState::GameOver) {
+                            bot_state = BotState::PreGame;
                         }
                     }
                 }
@@ -355,15 +356,16 @@ impl Bot {
         let game_over = {
             let state = self.game_state_rx.borrow();
 
-            if let Some(State::InGame { players, .. }) = &*state {
-                let (imposters, crew) = players
-                    .iter()
-                    .filter(|p| !p.dead)
-                    .partition::<Vec<_>, _>(|p| p.impostor);
+            match &*state {
+                Some(State::InGame { players, .. }) => {
+                    let (imposters, crew) = players
+                        .iter()
+                        .filter(|p| !p.dead)
+                        .partition::<Vec<_>, _>(|p| p.impostor);
 
-                imposters.is_empty() || imposters.len() >= crew.len()
-            } else {
-                !matches!(*state, Some(State::InGame { .. }))
+                    imposters.is_empty() || imposters.len() >= crew.len()
+                }
+                _ => true,
             }
         };
 
@@ -390,16 +392,10 @@ impl Bot {
         let mut futs = self
             .get_members_in_channel(self.living_channel)
             .iter()
-            .filter_map(|m| {
-                if m.mute {
-                    Some(
-                        self.discord_client
-                            .update_guild_member(m.guild_id, m.user.id)
-                            .mute(false),
-                    )
-                } else {
-                    None
-                }
+            .map(|m| {
+                self.discord_client
+                    .update_guild_member(m.guild_id, m.user.id)
+                    .mute(false)
             })
             .collect::<Vec<_>>();
 
