@@ -46,63 +46,6 @@ pub struct Builder {
 }
 
 impl Builder {
-    pub fn new(config_path: impl AsRef<Path>) -> Self {
-        let config = match Config::from_file(config_path) {
-            Ok(config) => config,
-            Err(why) => {
-                tracing::error!("Failed to read the config file. Aborting!");
-                tracing::error!("{}", why);
-                panic!();
-            }
-        };
-
-        let discord_client = Client::new(&config.token);
-
-        let discord_gateway = Shard::new(
-            &config.token,
-            Intents::GUILDS
-                | Intents::GUILD_MEMBERS
-                | Intents::GUILD_MESSAGES
-                | Intents::GUILD_VOICE_STATES,
-        );
-
-        let (broadcast_channel, living_channel, dead_channel) = (
-            config.broadcast_channel,
-            config.living_channel,
-            config.dead_channel,
-        );
-
-        let cache = InMemoryCache::builder()
-            .resource_types(
-                ResourceType::CHANNEL
-                    | ResourceType::GUILD
-                    | ResourceType::MEMBER
-                    | ResourceType::USER
-                    | ResourceType::VOICE_STATE,
-            )
-            .build();
-
-        let command_parser = {
-            let mut parser_config = CommandParserConfig::new();
-            parser_config.add_prefix("~");
-            parser_config.add_command("ident", false);
-            parser_config.add_command("check", false);
-            parser_config.add_command("stop", false);
-
-            Arc::new(Parser::new(parser_config))
-        };
-
-        Builder {
-            cache,
-            discord_gateway,
-            discord_client,
-            command_parser,
-            broadcast_channel,
-            living_channel,
-            dead_channel,
-        }
-    }
-
     pub async fn build(self, game_state_rx: Receiver<Option<State>>) -> Result<Bot> {
         let (owners, bot_id) = {
             let mut owners = HashSet::new();
@@ -200,6 +143,63 @@ pub struct Bot {
 }
 
 impl Bot {
+    pub fn builder(config_path: impl AsRef<Path>) -> Builder {
+        let config = match Config::from_file(config_path) {
+            Ok(config) => config,
+            Err(why) => {
+                tracing::error!("Failed to read the config file. Aborting!");
+                tracing::error!("{}", why);
+                panic!();
+            }
+        };
+
+        let discord_client = Client::new(&config.token);
+
+        let discord_gateway = Shard::new(
+            &config.token,
+            Intents::GUILDS
+                | Intents::GUILD_MEMBERS
+                | Intents::GUILD_MESSAGES
+                | Intents::GUILD_VOICE_STATES,
+        );
+
+        let (broadcast_channel, living_channel, dead_channel) = (
+            config.broadcast_channel,
+            config.living_channel,
+            config.dead_channel,
+        );
+
+        let cache = InMemoryCache::builder()
+            .resource_types(
+                ResourceType::CHANNEL
+                    | ResourceType::GUILD
+                    | ResourceType::MEMBER
+                    | ResourceType::USER
+                    | ResourceType::VOICE_STATE,
+            )
+            .build();
+
+        let command_parser = {
+            let mut parser_config = CommandParserConfig::new();
+            parser_config.add_prefix("~");
+            parser_config.add_command("ident", false);
+            parser_config.add_command("check", false);
+            parser_config.add_command("stop", false);
+
+            Arc::new(Parser::new(parser_config))
+        };
+
+        Builder {
+            cache,
+            discord_gateway,
+            discord_client,
+            command_parser,
+            broadcast_channel,
+            living_channel,
+            dead_channel,
+        }
+    }
+
     pub async fn start(&mut self) -> Result<()> {
         let shutdown_handle = self.discord_gateway.clone();
 

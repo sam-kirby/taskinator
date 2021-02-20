@@ -13,7 +13,7 @@ mod utils;
 
 use std::time::Duration;
 
-use crate::bot::Builder;
+use crate::bot::Bot;
 
 use sysinfo::{ProcessExt, RefreshKind, System, SystemExt};
 use taskinator_communicator::game::Game;
@@ -40,7 +40,7 @@ async fn bot_main() -> Result<()> {
     let (tx, rx) = watch::channel(None);
     let _au_watcher: JoinHandle<Result<()>> = tokio::spawn(async move {
         const CONN_RETRY_DELAY: u64 = 5;
-        const POLLING_DELAY: u64 = 3;
+        const POLLING_DELAY: u64 = 2;
         const MAX_CONSEC_FAILS: u64 = 3;
 
         let among_us_pid = {
@@ -115,7 +115,7 @@ async fn bot_main() -> Result<()> {
 
     // Setup bot
     tracing::info!("Constructing bot instance from config");
-    let mut bot = Builder::new("./Config.toml").build(rx).await?;
+    let mut bot = Bot::builder("./Config.toml").build(rx).await?;
 
     bot.start().await?;
 
