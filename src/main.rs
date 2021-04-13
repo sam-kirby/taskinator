@@ -16,7 +16,7 @@ use std::time::Duration;
 use crate::bot::Bot;
 
 use sysinfo::{ProcessExt, RefreshKind, System, SystemExt};
-use taskinator_communicator::game::Game;
+use taskinator_communicator::game::{Game, State};
 use tokio::{runtime, sync::watch, task::JoinHandle, time::sleep};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
@@ -79,7 +79,22 @@ async fn bot_main() -> Result<()> {
         loop {
             match among_us.state() {
                 Ok(state) => {
-                    tracing::debug!("Read updated state!");
+                    if let State::InGame { players, .. } = &state {
+                        let dead_players = players
+                            .iter()
+                            .filter(|p| p.dead)
+                            .map(|p| &p.name)
+                            .collect::<Vec<_>>();
+                        let impostors = players
+                            .iter()
+                            .filter(|p| p.impostor && !p.dead)
+                            .map(|p| &p.name)
+                            .collect::<Vec<_>>();
+                        tracing::debug!("Impostors:\t{:?}", impostors);
+                        if !dead_players.is_empty() {
+                            tracing::debug!("Dead:\t\t{:?}", dead_players);
+                        }
+                    }
                     tracing::trace!("{:?}", state);
                     failure_count = 0;
                     tx.send(Some(state))?;
