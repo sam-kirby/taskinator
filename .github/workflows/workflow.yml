@@ -8,7 +8,7 @@ on:
 jobs:
   fmt:
     name: Format
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
@@ -21,14 +21,14 @@ jobs:
           components: rustfmt
           profile: minimal
           override: true
-      
+
       - name: rustfmt
         run: cargo fmt --all -- --check
-  
+
   clippy:
     name: Clippy
     needs: [fmt]
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
@@ -75,98 +75,48 @@ jobs:
           release_name: Release ${{ github.sha }}
           draft: true
           prerelease: false
-  
+
   build:
-    name: Build for ${{ matrix.os }}
-    needs: [fmt, clippy, release]
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v2
-
-          
-    - name: Install toolchain
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        profile: minimal
-        override: true
-
-    - name: Setup cache
-      uses: actions/cache@v2
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-rustc-${{ steps.toolchain.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.lock') }}
-        
-    - name: Build
-      uses: actions-rs/cargo@v1
-      with:
-        command: build
-        args: --release
-    
-    - name: Zip
-      run: |
-        mv ${{ github.workspace }}/target/release/taskinator ${{ github.workspace }}/taskinator-${{ runner.os }}
-
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.release.outputs.upload_url }}
-        asset_path: ${{ github.workspace }}/taskinator-${{ runner.os }}
-        asset_name: taskinator-${{ runner.os }}
-        asset_content_type: application/octet-stream
-
-  build_win:
-    name: Build for windows-latest
+    name: Build for Windows
     needs: [fmt, clippy, release]
     runs-on: windows-latest
-    
+
     steps:
-    - name: Checkout
-      uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v2
 
-          
-    - name: Install toolchain
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        profile: minimal
-        override: true
+      - name: Install toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
 
-    - name: Setup cache
-      uses: actions/cache@v2
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-rustc-${{ steps.toolchain.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.lock') }}
-        
-    - name: Build
-      uses: actions-rs/cargo@v1
-      with:
-        command: build
-        args: --release
-    
-    - name: Zip
-      run: |
-        mv ${{ github.workspace }}/target/release/taskinator.exe ${{ github.workspace }}/taskinator-${{ runner.os }}.exe
+      - name: Setup cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rustc-${{ steps.toolchain.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.release.outputs.upload_url }}
-        asset_path: ${{ github.workspace }}/taskinator-${{ runner.os }}.exe
-        asset_name: taskinator-${{ runner.os }}.exe
-        asset_content_type: application/octet-stream
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+
+      - name: Move
+        run: |
+          mv ${{ github.workspace }}/target/release/taskinator.exe ${{ github.workspace }}/taskinator.exe
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.release.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}/taskinator.exe
+          asset_name: taskinator.exe
+          asset_content_type: application/octet-stream
