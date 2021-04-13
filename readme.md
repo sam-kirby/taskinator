@@ -1,18 +1,14 @@
-# Taskinator 5000
+# Taskinator
 
 ## Overview
 
-This is a simple Discord bot to assist with running a game of Among Us! It's here to help you stay focussed on who was near the body, not whether you remembered to unmute yourself on Discord.
+Taskinator is a Discord bot that automatically mutes and unmutes players on Discord during a game of Among Us.
 
-Only one person needs the bot installed, and is designed to help when you have players who are less tech savvy.
+At the beginning of the game, all players are automatically muted. When a meeting is called, the bot automatically unmutes anyone who is still alive - usually within 2 seconds. At the end of a meeting, the bot will either mute players if they are still alive, or move them to a separate channel where the dead players can hang out and openly discuss what's going on. At the end of the game all players are unmuted an moved back to the original channel.
 
-When a game begins, one player needs to execute the `~new` command. They are now the game master, and all players will be muted after 5 seconds.
+The bot must be run by the Among Us game host or it will fail to detect the end of meetings.
 
-When a body is found, or an emergency meeting begins, the game master needs to click the 🔴 reaction to the bots message. This will unmute all players who are still alive and move dead players back to the channel.
-
-When the meeting is over, the game master should remove their reaction on 🔴 and the bot will again mute living players. Dead players will be moved to a separate channel where they can freely discuss the game.
-
-A player marks themself as dead by clicking the 💀 reaction during a meeting (immediately muting them), or for those less techy players an admin can run `~dead @Player` to achieve the same effect.
+The bot must be able to match Discord Users to Among Us Players. If your nickname is the same on Discord as your player name in Among Us, it does this automatically. Otherwise you can use the `~ident <IN_GAME_NAME>` to set your alias. Use the `~check` command to confirm all players are matched to Discord users.
 
 ## Configuration
 
@@ -20,12 +16,12 @@ To run the bot, you need to create a `Config.toml` file in the directory you are
 
 ```toml
 token = "BOT_TOKEN"
-living_channel = "CHANNEL_ID"
-dead_channel = "CHANNEL_ID"
-spectator_role = "ROLE_ID"
+living_channel = "VOICE_CHANNEL_ID"
+dead_channel = "VOICE_CHANNEL_ID"
+broadcast_channel = "TEXT_CHANNEL_ID"
 ```
 
-The `token` is your Discord bot token. Make sure you add the bot user to the server you are chatting in.
+The `token` is your Discord bot token. Make sure you add the bot user to the server you are chatting in with appropriate permissions.
 
 The `living_channel` and `dead_channel` are the IDs of the channels which the bot will moderate. You can get a channel ID by turning on developer mode in Discord, then right clicking the channel name and choosing Copy ID.
 
@@ -33,21 +29,17 @@ The `spectator_role` is important if you have more than 10 people on the server.
 
 ## Running
 
-Builds are provided via Github Actions. Simply download the executable for your OS and place it in the same directory as the config file before running it.
+Builds are provided via Github Actions. Simply download the executable and place it in the same directory as the config file before running it.
 
 ## Building
 
 ### Requirements
 
-* Rust compiler (>1.48.0)
-* Git or a copy of the source code
+- Rust compiler (>1.48.0)
+- Git or a copy of the source code
 
 ### Steps
 
-1) Navigate to the source directory
-2) Create the configuration file as described above
-3) Execute `cargo run --release`
-
-## Possible future additions
-
-* Automatic detection of emergency meetings and dead players.
+1. Navigate to the source directory
+2. Create the configuration file as described above
+3. Execute `cargo run --release`
