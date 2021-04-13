@@ -3,14 +3,14 @@ use crate::Result;
 use std::{fs::File, io::Read, path::Path};
 
 use serde::Deserialize;
-use twilight_model::id::{ChannelId, RoleId};
+use twilight_model::id::ChannelId;
 
 #[derive(Deserialize)]
 pub struct Config {
     pub token: String,
+    pub broadcast_channel: ChannelId,
     pub living_channel: ChannelId,
     pub dead_channel: ChannelId,
-    pub spectator_role: RoleId,
 }
 
 impl Config {
