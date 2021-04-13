@@ -16,9 +16,9 @@ To run the bot, you need to create a `Config.toml` file in the directory you are
 
 ```toml
 token = "BOT_TOKEN"
-living_channel = "VOICE_CHANNEL_ID"
-dead_channel = "VOICE_CHANNEL_ID"
-broadcast_channel = "TEXT_CHANNEL_ID"
+living_channel = "VOICE_CHANNEL_ID"  # The voice channel the bot will search for players, living players will be muted in this channel during gameplay
+dead_channel = "VOICE_CHANNEL_ID"  # The voice channel dead players can use between meetings to chat
+broadcast_channel = "TEXT_CHANNEL_ID"  # The text channel in which to broadcast errors
 ```
 
 The `token` is your Discord bot token. Make sure you add the bot user to the server you are chatting in with appropriate permissions.
