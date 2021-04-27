@@ -13,7 +13,7 @@ lto = true
 futures = "0.3"
 parking_lot = "0.11"
 sysinfo = "0.16"
-taskinator-communicator = { git = "https://github.com/sam-kirby/taskinator-communicator.git", branch = "main" }
+taskinator-communicator = { git = "https://github.com/sam-kirby/taskinator-communicator.git", branch = "winapi" }
 tokio-stream = "0.1"
 toml = "0.5"
 tracing = "0.1"
