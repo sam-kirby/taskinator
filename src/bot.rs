@@ -545,7 +545,7 @@ impl Bot {
                 .iter()
                 .map(|m| {
                     let ign = match self.player_names.read().get(&m.user.id) {
-                        Some(ign) => ign.to_owned(),
+                        Some(ign) => ign.clone(),
                         None => m.known_as(),
                     };
                     (
@@ -592,7 +592,7 @@ impl Bot {
             .collect::<Vec<_>>();
 
         if !errors.is_empty() {
-            let _ = self
+            let _e_msg = self
                 .discord_client
                 .create_message(self.broadcast_channel)
                 .content("Errors occurred during batch operation, check logs")

@@ -12,7 +12,7 @@ impl KnownAs for CachedMember {
     fn known_as(&self) -> String {
         self.nick
             .as_ref()
-            .map_or_else(|| self.user.name.to_owned(), ToOwned::to_owned)
+            .map_or_else(|| self.user.name.clone(), Clone::clone)
     }
 }
 
