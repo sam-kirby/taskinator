@@ -130,9 +130,9 @@ async fn bot_main() -> Result<()> {
 
     // Setup bot
     tracing::info!("Constructing bot instance from config");
-    let mut bot = Bot::builder("./Config.toml").build(rx).await?;
+    let (mut bot, events) = Bot::builder("./Config.toml").build(rx).await?;
 
-    bot.start().await?;
+    bot.start(events).await?;
 
     Ok(())
 }

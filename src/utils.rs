@@ -1,6 +1,6 @@
 use twilight_cache_inmemory::model::CachedMember;
 use twilight_http::{request::prelude::CreateMessage, Client};
-use twilight_model::channel::Message;
+use twilight_model::{channel::Message, user::User};
 
 use crate::Result;
 
@@ -8,11 +8,12 @@ pub trait KnownAs {
     fn known_as(&self) -> String;
 }
 
-impl KnownAs for CachedMember {
+impl KnownAs for (&CachedMember, User) {
     fn known_as(&self) -> String {
-        self.nick
+        self.0
+            .nick
             .as_ref()
-            .map_or_else(|| self.user.name.clone(), Clone::clone)
+            .map_or_else(|| self.1.name.clone(), Clone::clone)
     }
 }
 

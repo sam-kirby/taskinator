@@ -14,8 +14,8 @@ use tokio::{signal::ctrl_c, sync::watch::Receiver, time::sleep};
 use twilight_cache_inmemory::{model::CachedMember, InMemoryCache, ResourceType};
 use twilight_command_parser::{Arguments, Command, CommandParserConfig, Parser};
 use twilight_embed_builder::{EmbedBuilder, EmbedFieldBuilder};
-use twilight_gateway::{Event, EventTypeFlags, Intents, Shard};
-use twilight_http::{Client, Result as TwiResult};
+use twilight_gateway::{shard::Events, Event, EventTypeFlags, Intents, Shard};
+use twilight_http::{error::Error as HttpError, Client};
 use twilight_mention::{Mention, ParseMention};
 use twilight_model::{
     channel::{Channel, GuildChannel, Message},
@@ -28,6 +28,8 @@ use crate::{
     Result,
 };
 
+type TwiResult<T> = std::result::Result<T, HttpError>;
+
 enum BotState {
     PreGame,
     InGame,
@@ -38,6 +40,7 @@ enum BotState {
 pub struct Builder {
     cache: InMemoryCache,
     discord_gateway: Shard,
+    gateway_events: Events,
     discord_client: Client,
     command_parser: Arc<Parser<'static>>,
     broadcast_channel: ChannelId,
@@ -46,7 +49,7 @@ pub struct Builder {
 }
 
 impl Builder {
-    pub async fn build(self, game_state_rx: Receiver<Option<State>>) -> Result<Bot> {
+    pub async fn build(self, game_state_rx: Receiver<Option<State>>) -> Result<(Bot, Events)> {
         let (owners, bot_id) = {
             let mut owners = HashSet::new();
 
@@ -111,23 +114,26 @@ impl Builder {
             panic!();
         };
 
-        Ok(Bot {
-            cache: self.cache,
-            discord_gateway: self.discord_gateway,
-            discord_client: self.discord_client,
-            command_parser: self.command_parser,
-            bot_id,
-            owners,
-            broadcast_channel: broadcast_channel.id,
-            living_channel: living_channel.id,
-            dead_channel: dead_channel.id,
-            player_names: Arc::new(RwLock::new(HashMap::new())),
-            game_state_rx,
-        })
+        Ok((
+            Bot {
+                cache: self.cache,
+                discord_gateway: self.discord_gateway,
+                discord_client: self.discord_client,
+                command_parser: self.command_parser,
+                bot_id,
+                owners,
+                broadcast_channel: broadcast_channel.id,
+                living_channel: living_channel.id,
+                dead_channel: dead_channel.id,
+                player_names: Arc::new(RwLock::new(HashMap::new())),
+                game_state_rx,
+            },
+            self.gateway_events,
+        ))
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Bot {
     cache: InMemoryCache,
     discord_gateway: Shard,
@@ -155,13 +161,21 @@ impl Bot {
 
         let discord_client = Client::new(&config.token);
 
-        let discord_gateway = Shard::new(
+        let event_flags: EventTypeFlags = EventTypeFlags::GUILD_CREATE
+            | EventTypeFlags::MEMBER_ADD
+            | EventTypeFlags::MEMBER_UPDATE
+            | EventTypeFlags::MESSAGE_CREATE
+            | EventTypeFlags::VOICE_STATE_UPDATE;
+
+        let (discord_gateway, gateway_events) = Shard::builder(
             &config.token,
             Intents::GUILDS
                 | Intents::GUILD_MEMBERS
                 | Intents::GUILD_MESSAGES
                 | Intents::GUILD_VOICE_STATES,
-        );
+        )
+        .event_types(event_flags)
+        .build();
 
         let (broadcast_channel, living_channel, dead_channel) = (
             config.broadcast_channel,
@@ -192,6 +206,7 @@ impl Bot {
         Builder {
             cache,
             discord_gateway,
+            gateway_events,
             discord_client,
             command_parser,
             broadcast_channel,
@@ -200,7 +215,7 @@ impl Bot {
         }
     }
 
-    pub async fn start(&mut self) -> Result<()> {
+    pub async fn start(&mut self, mut events: Events) -> Result<()> {
         let shutdown_handle = self.discord_gateway.clone();
 
         tokio::spawn(async move {
@@ -213,14 +228,6 @@ impl Bot {
         });
 
         self.discord_gateway.start().await?;
-
-        let event_flags: EventTypeFlags = EventTypeFlags::GUILD_CREATE
-            | EventTypeFlags::MEMBER_ADD
-            | EventTypeFlags::MEMBER_UPDATE
-            | EventTypeFlags::MESSAGE_CREATE
-            | EventTypeFlags::VOICE_STATE_UPDATE;
-
-        let mut events = self.discord_gateway.some_events(event_flags);
 
         let mut bot = self.clone();
         tokio::spawn(async move {
@@ -260,7 +267,7 @@ impl Bot {
                             _ => {}
                         }
                     }
-                    Some(State::Lobby { .. }) | Some(State::Menu) | None => {
+                    Some(State::Lobby { .. } | State::Menu) | None => {
                         // No game running or crash
                         if matches!(bot_state, BotState::InGame | BotState::InMeeting) {
                             bot_state = BotState::PreGame;
@@ -327,7 +334,7 @@ impl Bot {
             .filter_map(|(m, p)| match p {
                 Some(p) if !p.dead => Some(
                     self.discord_client
-                        .update_guild_member(m.guild_id, m.user.id)
+                        .update_guild_member(m.guild_id, m.user_id)
                         .mute(false),
                 ),
                 _ => None,
@@ -339,7 +346,7 @@ impl Bot {
                 .iter()
                 .map(|m| {
                     self.discord_client
-                        .update_guild_member(m.guild_id, m.user.id)
+                        .update_guild_member(m.guild_id, m.user_id)
                         .channel_id(self.living_channel)
                         .mute(true)
                 }),
@@ -394,7 +401,7 @@ impl Bot {
             .iter()
             .map(|m| {
                 self.discord_client
-                    .update_guild_member(m.guild_id, m.user.id)
+                    .update_guild_member(m.guild_id, m.user_id)
                     .mute(false)
             })
             .collect::<Vec<_>>();
@@ -404,7 +411,7 @@ impl Bot {
                 .iter()
                 .map(|m| {
                     self.discord_client
-                        .update_guild_member(m.guild_id, m.user.id)
+                        .update_guild_member(m.guild_id, m.user_id)
                         .channel_id(self.living_channel)
                 }),
         );
@@ -420,13 +427,13 @@ impl Bot {
             .filter_map(|(m, p)| match p {
                 Some(p) if p.dead => Some(
                     self.discord_client
-                        .update_guild_member(m.guild_id, m.user.id)
+                        .update_guild_member(m.guild_id, m.user_id)
                         .channel_id(self.dead_channel)
                         .mute(false),
                 ),
                 Some(p) if !p.dead => Some(
                     self.discord_client
-                        .update_guild_member(m.guild_id, m.user.id)
+                        .update_guild_member(m.guild_id, m.user_id)
                         .mute(true),
                 ),
                 _ => None,
@@ -490,7 +497,7 @@ impl Bot {
                 tracing::trace!("{:?}", matched_players);
                 let unmatched_players = matched_players
                     .into_iter()
-                    .filter_map(|(m, p)| if p.is_none() { Some(m.user.id) } else { None })
+                    .filter_map(|(m, p)| if p.is_none() { Some(m.user_id) } else { None })
                     .collect::<Vec<_>>();
 
                 if unmatched_players.is_empty() {
@@ -501,13 +508,12 @@ impl Bot {
                         .await?;
                 } else {
                     let embed = EmbedBuilder::new()
-                        .description("Could not match all members to players")?
-                        .color(0xFF_00_00)?;
+                        .description("Could not match all members to players")
+                        .color(0xFF_00_00);
 
                     let embed = unmatched_players.iter().fold(embed, |embed, uid| {
                         embed.field(
                             EmbedFieldBuilder::new("not found", format!("{}", uid.mention()))
-                                .unwrap()
                                 .build(),
                         )
                     });
@@ -532,11 +538,11 @@ impl Bot {
 
     fn match_members_to_players(
         &self,
-        members: &[Arc<CachedMember>],
-    ) -> Option<Vec<(Arc<CachedMember>, Option<Player>)>> {
+        members: &[CachedMember],
+    ) -> Option<Vec<(CachedMember, Option<Player>)>> {
         let game_state = self.game_state_rx.borrow();
         let players = match &*game_state {
-            Some(State::Lobby { players }) | Some(State::InGame { players, .. }) => Some(players),
+            Some(State::Lobby { players } | State::InGame { players, .. }) => Some(players),
             Some(_) | None => None,
         };
 
@@ -544,9 +550,9 @@ impl Bot {
             members
                 .iter()
                 .map(|m| {
-                    let ign = match self.player_names.read().get(&m.user.id) {
+                    let ign = match self.player_names.read().get(&m.user_id) {
                         Some(ign) => ign.clone(),
-                        None => m.known_as(),
+                        None => (m, self.cache.user(m.user_id).unwrap()).known_as(),
                     };
                     (
                         m.clone(),
@@ -565,13 +571,18 @@ impl Bot {
         })
     }
 
-    fn get_members_in_channel(&self, channel: ChannelId) -> Vec<Arc<CachedMember>> {
+    fn get_members_in_channel(&self, channel: ChannelId) -> Vec<CachedMember> {
         self.cache
             .voice_channel_states(channel)
             .map_or(Vec::new(), |vs| {
                 vs.iter()
-                    .map(|vs| self.cache.member(vs.guild_id.unwrap(), vs.user_id).unwrap())
-                    .filter(|m| !m.user.bot)
+                    .map(|vs| {
+                        (
+                            self.cache.member(vs.guild_id.unwrap(), vs.user_id).unwrap(),
+                            self.cache.user(vs.user_id).unwrap(),
+                        )
+                    })
+                    .filter_map(|(m, u)| if u.bot { None } else { Some(m) })
                     .collect()
             })
     }
